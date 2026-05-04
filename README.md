@@ -34,11 +34,18 @@ sudo make install   # installs to /usr/local/bin by default
 
 ## Configuration
 
-Each non-blank, non-comment line is `KEY:NAME:COMMAND`. The first two `:` are
-the separators, so `COMMAND` may contain `:`. `KEY` is a single character and
-is matched case-sensitively (uppercase letters require Shift). A leading
-`#!` shebang line is treated as a comment, so config files can be made
-executable directly.
+Each non-blank, non-comment line is `KEY[&]:NAME:COMMAND`:
+
+- The first two `:` are the separators, so `COMMAND` may contain `:`.
+- `KEY` is a single character, matched case-sensitively (uppercase letters
+  require Shift).
+- An optional `&` between the key and the first `:` marks the entry
+  *sticky*: the command runs but `wlnch` stays open, so the same key can
+  be pressed again (e.g. `o&:term:kitty` spawns a new terminal every
+  time `o` is pressed). Sticky entries are highlighted with a reddish
+  key letter in the rendered list.
+- A leading `#!` shebang line is treated as a comment, so config files
+  can be made executable directly.
 
 See [`wlnchrc.example`](wlnchrc.example) for a sample.
 

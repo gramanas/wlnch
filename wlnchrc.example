@@ -1,8 +1,11 @@
 #!/usr/local/bin/wlnch
-# Format: KEY:NAME:COMMAND
+# Format: KEY[&]:NAME:COMMAND
 # - Lines beginning with '#' and blank lines are ignored.
 # - The first two ':' separate the fields; the COMMAND may contain ':'.
 # - KEY is a single character (case-sensitive: 's' and 'S' are different).
+# - A '&' between the KEY and the first ':' makes the entry sticky:
+#   the command runs but wlnch stays open, so the same key can be
+#   pressed again (e.g. to spawn multiple terminals).
 # - ESC and Ctrl-G always exit without running anything.
 
 e:emacs:emacsclient -swork -c -a ""
@@ -10,3 +13,4 @@ t:emacs-todo:uwsm app -- emacsclient -stodo -c -a ""
 f:firefox:uwsm app -- firefox
 s:grim:uwsm app -- bash -c 'grim -g "$(slurp -d)" - | wl-copy -t image/png'
 S:slack:uwsm app -- slack
+o&:term:kitty

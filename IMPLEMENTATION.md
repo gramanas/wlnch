@@ -107,17 +107,41 @@ naively read stdin don't block on a closed pipe.
 ## Config format
 
 ```
-KEY:NAME:COMMAND
+KEY[&]:NAME:COMMAND
 ```
 
 - Lines beginning with `#` and blank lines are ignored. A leading `#!`
   shebang is therefore naturally skipped.
 - `KEY` is a single UTF-8 character (1–4 bytes).
-- The first two `:` are the field separators. `COMMAND` may contain any
-  number of `:`.
+- An optional `&` between the key and the first `:` marks the entry as
+  *sticky* (see below).
+- The first two `:` (after the optional `&`) are the field separators.
+  `COMMAND` may contain any number of `:`.
 - Match is case-sensitive: `s` and `S` are different bindings (the latter
   requires Shift). This is achieved by converting the codepoint to an xkb
   keysym with `xkb_utf32_to_keysym`, which gives `XKB_KEY_s` vs `XKB_KEY_S`.
+
+### Sticky entries
+
+A binding written as `KEY&:NAME:COMMAND` keeps `wlnch` running after
+spawning the command, so the user can press it again (or another key)
+without re-launching the chooser. Use case: a one-off launcher for a
+desktop environment where you want to spawn several terminals or browser
+windows in succession without dismissing the menu between them.
+
+Implementation:
+
+- The parser recognises an optional `&` between the decoded key codepoint
+  and the first `:`, and stores it as `bool sticky` on `struct entry`.
+- The dispatch path always calls `spawn_command` on a match; it only
+  sets `g_running = 0` when `!entry.sticky`.
+- `Esc` and `Ctrl-G` continue to exit unconditionally — sticky bindings
+  are about *spawn* events, not about how to leave the launcher.
+- The visual cue for stickiness is **color**, not extra glyphs: the key
+  letter inside `[...]` is drawn in `COLOR_KEY_STICKY` (reddish) instead
+  of the regular `COLOR_KEY` (blue accent). Bracket geometry is identical
+  for sticky and non-sticky rows, so all names align without padding
+  tricks.
 
 ### Where the config comes from
 

@@ -45,17 +45,18 @@
 
 /* ---------- 1. Constants ---------- */
 
-#define DEFAULT_FONT       "monospace"
+#define DEFAULT_FONT       "liberation mono:size=32"
 #define DEFAULT_FONT_PIXEL 32
 
 /* ARGB8888 colors. wl_shm ARGB8888 is little-endian byte order, which on
  * little-endian hosts means a uint32_t literal 0xAARRGGBB lays out as
  * B,G,R,A in memory and is interpreted as alpha-premultiplied... we use
  * straight alpha for the background only and otherwise fully opaque text. */
-#define COLOR_BG     0xF01E1E2EU  /* dark, ~94% opaque */
-#define COLOR_FG     0xFFE0E0E0U
-#define COLOR_KEY    0xFF8AB4F8U  /* accent for the key letter */
-#define COLOR_SEP    0xFF6C7086U  /* dim separator */
+#define COLOR_BG         0xF01E1E2EU  /* dark, ~94% opaque */
+#define COLOR_FG         0xFFE0E0E0U
+#define COLOR_KEY        0xFF8AB4F8U  /* accent for normal key letters */
+#define COLOR_KEY_STICKY 0xFFE06B6BU  /* reddish accent for sticky keys */
+#define COLOR_SEP        0xFF6C7086U  /* dim separator */
 
 #define PADDING_X 24
 #define PADDING_Y 18
@@ -67,6 +68,7 @@
 struct entry {
     uint32_t      codepoint; /* unicode value of the key character */
     xkb_keysym_t  keysym;    /* matching xkb keysym */
+    bool          sticky;    /* `KEY&:NAME:CMD` => keep running after spawn */
     char         *name;
     char         *command;
 };
@@ -169,15 +171,25 @@ static void parse_config(FILE *f, const char *source) {
         while (*p == ' ' || *p == '\t') ++p;
         if (*p == '\0' || *p == '#') continue;
 
-        /* Field 1: KEY (single UTF-8 character, then ':'). */
+        /* Field 1: KEY [&] then ':'.  An optional '&' between the key
+         * character and the colon marks the entry as sticky: the command
+         * runs but wlnch keeps running so the key can be pressed again. */
         uint32_t cp;
         int klen = utf8_decode(p, &cp);
         if (klen == 0)
             die("config %s:%d: invalid UTF-8 in key", source, lineno);
-        if (p[klen] != ':')
-            die("config %s:%d: expected ':' after key", source, lineno);
 
-        char *name_start = p + klen + 1;
+        bool sticky = false;
+        int  off = klen;
+        if (p[off] == '&') {
+            sticky = true;
+            ++off;
+        }
+        if (p[off] != ':')
+            die("config %s:%d: expected ':' or '&:' after key",
+                source, lineno);
+
+        char *name_start = p + off + 1;
         char *colon2 = strchr(name_start, ':');
         if (!colon2)
             die("config %s:%d: expected ':' between name and command",
@@ -199,6 +211,7 @@ static void parse_config(FILE *f, const char *source) {
         }
         g_entries[g_n_entries].codepoint = cp;
         g_entries[g_n_entries].keysym    = xkb_utf32_to_keysym(cp);
+        g_entries[g_n_entries].sticky    = sticky;
         g_entries[g_n_entries].name      = xstrdup(name);
         g_entries[g_n_entries].command   = xstrdup(cmd);
         ++g_n_entries;
@@ -400,29 +413,46 @@ static struct wl_buffer *create_shm_buffer(int w, int h, uint32_t **pixels_out) 
 
 /* ---------- 8. Drawing ---------- */
 
+/* Encode a codepoint as a nul-terminated UTF-8 string. Buffer must be >=5
+ * bytes. Returns the number of bytes written (excluding the terminator). */
+static int utf8_encode(uint32_t cp, char *out) {
+    int n = 0;
+    if (cp < 0x80) {
+        out[n++] = (char)cp;
+    } else if (cp < 0x800) {
+        out[n++] = (char)(0xC0 | (cp >> 6));
+        out[n++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out[n++] = (char)(0xE0 | (cp >> 12));
+        out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[n++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        out[n++] = (char)(0xF0 | (cp >> 18));
+        out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        out[n++] = (char)(0x80 | ((cp >>  6) & 0x3F));
+        out[n++] = (char)(0x80 | (cp & 0x3F));
+    }
+    out[n] = '\0';
+    return n;
+}
+
+/* Build the bracketed-key label for an entry: "[k]". Stickiness is
+ * conveyed by color in render_frame, not by extra glyphs, so all key
+ * cells render to the same width. */
+static void key_label_str(const struct entry *e, char *out) {
+    int n = 0;
+    out[n++] = '[';
+    n += utf8_encode(e->codepoint, out + n);
+    out[n++] = ']';
+    out[n]   = '\0';
+}
+
 /* Compute window dimensions based on the longest row "[k]   name". */
 static void compute_window_size(void) {
-    /* Width of the widest "[k]" cell. */
     int key_cell_w = 0;
     for (size_t i = 0; i < g_n_entries; ++i) {
         char buf[16];
-        int n = 0;
-        buf[n++] = '[';
-        if (g_entries[i].codepoint < 0x80) {
-            buf[n++] = (char)g_entries[i].codepoint;
-        } else {
-            uint32_t cp = g_entries[i].codepoint;
-            if (cp < 0x800) {
-                buf[n++] = (char)(0xC0 | (cp >> 6));
-                buf[n++] = (char)(0x80 | (cp & 0x3F));
-            } else {
-                buf[n++] = (char)(0xE0 | (cp >> 12));
-                buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                buf[n++] = (char)(0x80 | (cp & 0x3F));
-            }
-        }
-        buf[n++] = ']';
-        buf[n] = '\0';
+        key_label_str(&g_entries[i], buf);
         int kw = text_width(buf);
         if (kw > key_cell_w) key_cell_w = kw;
     }
@@ -456,21 +486,7 @@ static void render_frame(uint32_t *pixels, int w, int h) {
     int key_cell_w = 0;
     for (size_t i = 0; i < g_n_entries; ++i) {
         char buf[16];
-        int n = 0;
-        buf[n++] = '[';
-        uint32_t cp = g_entries[i].codepoint;
-        if (cp < 0x80) {
-            buf[n++] = (char)cp;
-        } else if (cp < 0x800) {
-            buf[n++] = (char)(0xC0 | (cp >> 6));
-            buf[n++] = (char)(0x80 | (cp & 0x3F));
-        } else {
-            buf[n++] = (char)(0xE0 | (cp >> 12));
-            buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-            buf[n++] = (char)(0x80 | (cp & 0x3F));
-        }
-        buf[n++] = ']';
-        buf[n] = '\0';
+        key_label_str(&g_entries[i], buf);
         int kw = text_width(buf);
         if (kw > key_cell_w) key_cell_w = kw;
     }
@@ -481,29 +497,21 @@ static void render_frame(uint32_t *pixels, int w, int h) {
     for (size_t i = 0; i < g_n_entries; ++i) {
         int x = PADDING_X;
 
-        /* Render the bracketed key, with the key char in accent color. */
-        char open_b[2]  = "[";
-        char close_b[2] = "]";
+        /* Bracketed key label. The brackets are always in the separator
+         * color; the key letter is accent-colored, with sticky entries
+         * using a distinct reddish accent. */
         char ch_buf[8];
-        int  cn = 0;
-        uint32_t cp = g_entries[i].codepoint;
-        if (cp < 0x80) {
-            ch_buf[cn++] = (char)cp;
-        } else if (cp < 0x800) {
-            ch_buf[cn++] = (char)(0xC0 | (cp >> 6));
-            ch_buf[cn++] = (char)(0x80 | (cp & 0x3F));
-        } else {
-            ch_buf[cn++] = (char)(0xE0 | (cp >> 12));
-            ch_buf[cn++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-            ch_buf[cn++] = (char)(0x80 | (cp & 0x3F));
-        }
-        ch_buf[cn] = '\0';
+        utf8_encode(g_entries[i].codepoint, ch_buf);
 
-        x += draw_text(pixels, w, h, x, y, open_b,  COLOR_SEP);
-        x += draw_text(pixels, w, h, x, y, ch_buf,  COLOR_KEY);
-        x += draw_text(pixels, w, h, x, y, close_b, COLOR_SEP);
+        uint32_t key_color = g_entries[i].sticky
+            ? COLOR_KEY_STICKY
+            : COLOR_KEY;
 
-        /* Pad to align names. */
+        x += draw_text(pixels, w, h, x, y, "[",    COLOR_SEP);
+        x += draw_text(pixels, w, h, x, y, ch_buf, key_color);
+        x += draw_text(pixels, w, h, x, y, "]",    COLOR_SEP);
+
+        /* Pad so names line up. */
         int row_x = PADDING_X + key_cell_w + KEY_GAP;
         if (x < row_x) x = row_x;
 
@@ -651,7 +659,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
     for (size_t i = 0; i < g_n_entries; ++i) {
         if (g_entries[i].keysym == sym) {
             spawn_command(g_entries[i].command);
-            g_running = 0;
+            if (!g_entries[i].sticky) g_running = 0;
             return;
         }
     }
