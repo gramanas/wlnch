@@ -1,0 +1,12 @@
+#!/usr/local/bin/wlnch
+# Format: KEY:NAME:COMMAND
+# - Lines beginning with '#' and blank lines are ignored.
+# - The first two ':' separate the fields; the COMMAND may contain ':'.
+# - KEY is a single character (case-sensitive: 's' and 'S' are different).
+# - ESC and Ctrl-G always exit without running anything.
+
+e:emacs:emacsclient -swork -c -a ""
+t:emacs-todo:uwsm app -- emacsclient -stodo -c -a ""
+f:firefox:uwsm app -- firefox
+s:grim:uwsm app -- bash -c 'grim -g "$(slurp -d)" - | wl-copy -t image/png'
+S:slack:uwsm app -- slack
