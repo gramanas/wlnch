@@ -69,9 +69,10 @@
 /* ---------- 2. Globals ---------- */
 
 struct entry {
-    uint32_t      codepoint; /* unicode value of the key character */
-    xkb_keysym_t  keysym;    /* matching xkb keysym */
-    bool          sticky;    /* `KEY&:NAME:CMD` => keep running after spawn */
+    uint32_t      codepoint;       /* unicode value of the key character */
+    xkb_keysym_t  keysym;          /* matching xkb keysym */
+    bool          sticky;          /* `KEY&:NAME:CMD` => keep running after spawn */
+    bool          separator_after; /* a `---` line followed this entry */
     char         *name;
     char         *command;
 };
@@ -174,6 +175,16 @@ static void parse_config(FILE *f, const char *source) {
         while (*p == ' ' || *p == '\t') ++p;
         if (*p == '\0' || *p == '#') continue;
 
+        /* A line consisting solely of `---` (after stripping whitespace)
+         * marks the previous entry as having a visual separator after it.
+         * Lone `---` before any entry is silently ignored; consecutive
+         * `---` lines collapse to a single separator. */
+        if (strcmp(p, "---") == 0) {
+            if (g_n_entries > 0)
+                g_entries[g_n_entries - 1].separator_after = true;
+            continue;
+        }
+
         /* Field 1: KEY [&] then ':'.  An optional '&' between the key
          * character and the colon marks the entry as sticky: the command
          * runs but wlnch keeps running so the key can be pressed again. */
@@ -212,11 +223,12 @@ static void parse_config(FILE *f, const char *source) {
             g_entries = realloc(g_entries, cap * sizeof(*g_entries));
             if (!g_entries) die("out of memory");
         }
-        g_entries[g_n_entries].codepoint = cp;
-        g_entries[g_n_entries].keysym    = xkb_utf32_to_keysym(cp);
-        g_entries[g_n_entries].sticky    = sticky;
-        g_entries[g_n_entries].name      = xstrdup(name);
-        g_entries[g_n_entries].command   = xstrdup(cmd);
+        g_entries[g_n_entries].codepoint       = cp;
+        g_entries[g_n_entries].keysym          = xkb_utf32_to_keysym(cp);
+        g_entries[g_n_entries].sticky          = sticky;
+        g_entries[g_n_entries].separator_after = false;
+        g_entries[g_n_entries].name            = xstrdup(name);
+        g_entries[g_n_entries].command         = xstrdup(cmd);
         ++g_n_entries;
     }
 
@@ -469,8 +481,15 @@ static void compute_window_size(void) {
     int row_w = key_cell_w + KEY_GAP + max_name_w;
     int row_h = g_line_height + ROW_GAP;
 
+    /* Separators only contribute height when there's an entry after them;
+     * a trailing `---` is treated as a no-op so the window doesn't grow. */
+    int n_separators = 0;
+    for (size_t i = 0; i + 1 < g_n_entries; ++i)
+        if (g_entries[i].separator_after) ++n_separators;
+
     g_win_w = PADDING_X * 2 + row_w;
-    g_win_h = PADDING_Y * 2 + (int)g_n_entries * row_h - ROW_GAP;
+    g_win_h = PADDING_Y * 2 + (int)g_n_entries * row_h - ROW_GAP
+              + n_separators * row_h;
 
     /* Round up to multiples of 2 to avoid stride oddities. */
     if (g_win_w & 1) g_win_w++;
@@ -521,6 +540,11 @@ static void render_frame(uint32_t *pixels, int w, int h) {
         draw_text(pixels, w, h, x, y, g_entries[i].name, COLOR_FG);
 
         y += row_h;
+
+        /* Insert one extra blank row after entries flagged with `---`,
+         * but only between entries — a trailing flag adds no padding. */
+        if (g_entries[i].separator_after && i + 1 < g_n_entries)
+            y += row_h;
     }
 }
 

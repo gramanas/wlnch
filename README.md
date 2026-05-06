@@ -44,6 +44,9 @@ Each non-blank, non-comment line is `KEY[&]:NAME:COMMAND`:
   be pressed again (e.g. `o&:term:kitty` spawns a new terminal every
   time `o` is pressed). Sticky entries are highlighted with a reddish
   key letter in the rendered list.
+- A line consisting solely of `---` inserts a blank-row visual
+  separator between groups of entries. Leading, trailing, and
+  consecutive `---` lines are no-ops.
 - A leading `#!` shebang line is treated as a comment, so config files
   can be made executable directly.
 

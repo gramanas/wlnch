@@ -112,6 +112,9 @@ KEY[&]:NAME:COMMAND
 
 - Lines beginning with `#` and blank lines are ignored. A leading `#!`
   shebang is therefore naturally skipped.
+- A line containing only `---` (after whitespace stripping) is a
+  *separator directive*: it sets `separator_after = true` on the
+  preceding entry. See [Separators](#separators) below.
 - `KEY` is a single UTF-8 character (1–4 bytes).
 - An optional `&` between the key and the first `:` marks the entry as
   *sticky* (see below).
@@ -120,6 +123,25 @@ KEY[&]:NAME:COMMAND
 - Match is case-sensitive: `s` and `S` are different bindings (the latter
   requires Shift). This is achieved by converting the codepoint to an xkb
   keysym with `xkb_utf32_to_keysym`, which gives `XKB_KEY_s` vs `XKB_KEY_S`.
+
+### Separators
+
+A line containing just `---` flips `separator_after` to `true` on the
+*previous* entry. At render time, an extra blank row's worth of
+vertical space (`row_h = line_height + ROW_GAP` pixels) is inserted
+after each flagged entry. The window-size pass adds the same amount to
+`g_win_h` so the buffer is large enough.
+
+Edge behavior is intentionally forgiving:
+
+- A `---` before any entry has no entry to mark, so it's silently
+  ignored.
+- Multiple consecutive `---` lines just set the same flag again, so they
+  collapse to a single separator (no stacking of blank rows).
+- A trailing `---` (after the last entry) flips the flag on the last
+  entry, but both `compute_window_size` and `render_frame` skip the
+  separator when there is no following entry. This way the window
+  doesn't grow a useless empty tail.
 
 ### Sticky entries
 
