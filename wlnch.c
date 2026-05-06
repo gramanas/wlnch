@@ -52,11 +52,14 @@
  * little-endian hosts means a uint32_t literal 0xAARRGGBB lays out as
  * B,G,R,A in memory and is interpreted as alpha-premultiplied... we use
  * straight alpha for the background only and otherwise fully opaque text. */
-#define COLOR_BG         0xF01E1E2EU  /* dark, ~94% opaque */
-#define COLOR_FG         0xFFE0E0E0U
+// #define COLOR_BG         0xF01E1E2EU  /* dark, ~94% opaque */
+#define COLOR_BG         0xF0242424U  /* dark, ~94% opaque */
+// #define COLOR_FG         0xFFE0E0E0U
+#define COLOR_FG         0xFFF6F3E8U
 #define COLOR_KEY        0xFF8AB4F8U  /* accent for normal key letters */
 #define COLOR_KEY_STICKY 0xFFE06B6BU  /* reddish accent for sticky keys */
-#define COLOR_SEP        0xFF6C7086U  /* dim separator */
+// #define COLOR_SEP        0xFF6C7086U  /* dim separator */
+#define COLOR_SEP        0xFF000000U
 
 #define PADDING_X 24
 #define PADDING_Y 18
@@ -73,32 +76,32 @@ struct entry {
     char         *command;
 };
 
-static struct entry *g_entries;
-static size_t        g_n_entries;
+static struct entry                 * g_entries;
+static size_t                         g_n_entries;
 
-static struct wl_display    *g_display;
-static struct wl_registry   *g_registry;
-static struct wl_compositor *g_compositor;
-static struct wl_shm        *g_shm;
-static struct wl_seat       *g_seat;
-static struct wl_keyboard   *g_keyboard;
-static struct zwlr_layer_shell_v1   *g_layer_shell;
-static struct wl_surface            *g_surface;
-static struct zwlr_layer_surface_v1 *g_layer_surface;
+static struct wl_display            * g_display;
+static struct wl_registry           * g_registry;
+static struct wl_compositor         * g_compositor;
+static struct wl_shm                * g_shm;
+static struct wl_seat               * g_seat;
+static struct wl_keyboard           * g_keyboard;
+static struct zwlr_layer_shell_v1   * g_layer_shell;
+static struct wl_surface            * g_surface;
+static struct zwlr_layer_surface_v1 * g_layer_surface;
 
-static struct xkb_context *g_xkb_ctx;
-static struct xkb_keymap  *g_xkb_keymap;
-static struct xkb_state   *g_xkb_state;
+static struct xkb_context           * g_xkb_ctx;
+static struct xkb_keymap            * g_xkb_keymap;
+static struct xkb_state             * g_xkb_state;
 
-static FT_Library g_ft_lib;
-static FT_Face    g_ft_face;
-static int        g_line_height;
-static int        g_ascent;
+static FT_Library                     g_ft_lib;
+static FT_Face                        g_ft_face;
+static int                            g_line_height;
+static int                            g_ascent;
 
-static int   g_running   = 1;
-static int   g_buffer_attached = 0;
-static int   g_win_w     = 0;
-static int   g_win_h     = 0;
+static int                            g_running   = 1;
+static int                            g_buffer_attached = 0;
+static int                            g_win_w     = 0;
+static int                            g_win_h     = 0;
 
 static const char *g_font_pattern = NULL; /* fontconfig pattern */
 
@@ -634,7 +637,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
     xkb_keysym_t sym = (n_syms > 0) ? syms[0] : XKB_KEY_NoSymbol;
 
     /* Always exit on Escape. */
-    if (sym == XKB_KEY_Escape) {
+    if (sym == XKB_KEY_Escape || sym == XKB_KEY_q) {
         g_running = 0;
         return;
     }
