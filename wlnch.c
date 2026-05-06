@@ -3,7 +3,7 @@
  *
  * Single translation unit. Layout:
  *
- *   1. Includes and constants
+ *   1. Includes (compile-time configuration lives in config.h)
  *   2. Globals (config, wayland, xkb, font, window state)
  *   3. Utility helpers
  *   4. Config parser
@@ -43,28 +43,7 @@
 
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
-/* ---------- 1. Constants ---------- */
-
-#define DEFAULT_FONT       "liberation mono:size=32"
-#define DEFAULT_FONT_PIXEL 32
-
-/* ARGB8888 colors. wl_shm ARGB8888 is little-endian byte order, which on
- * little-endian hosts means a uint32_t literal 0xAARRGGBB lays out as
- * B,G,R,A in memory and is interpreted as alpha-premultiplied... we use
- * straight alpha for the background only and otherwise fully opaque text. */
-// #define COLOR_BG         0xF01E1E2EU  /* dark, ~94% opaque */
-#define COLOR_BG         0xF0242424U  /* dark, ~94% opaque */
-// #define COLOR_FG         0xFFE0E0E0U
-#define COLOR_FG         0xFFF6F3E8U
-#define COLOR_KEY        0xFF8AB4F8U  /* accent for normal key letters */
-#define COLOR_KEY_STICKY 0xFFE06B6BU  /* reddish accent for sticky keys */
-// #define COLOR_SEP        0xFF6C7086U  /* dim separator */
-#define COLOR_SEP        0xFF000000U
-
-#define PADDING_X 24
-#define PADDING_Y 18
-#define ROW_GAP    6
-#define KEY_GAP   18  /* gap between "[k]" and the name */
+#include "config.h"
 
 /* ---------- 2. Globals ---------- */
 

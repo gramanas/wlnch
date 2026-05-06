@@ -12,6 +12,11 @@ in [`README.md`](README.md); this file is the *internals*.
   `libfontconfig`, plus `librt` for `memfd_create`.
 - One translation unit: [`wlnch.c`](wlnch.c). Sections are explicitly numbered
   in the file's top comment so you can jump around.
+- Compile-time configuration (default font, color palette, paddings,
+  row/key gaps) is split out into [`config.h`](config.h) — a header of
+  documented `#define`s, included near the top of `wlnch.c`. The
+  Makefile lists `config.h` as a dependency of `wlnch.o`, so editing
+  it triggers a rebuild on the next `make`.
 - Two vendored protocol XMLs under [`protocols/`](protocols/):
   - `wlr-layer-shell-unstable-v1.xml` — the actual protocol used.
   - `xdg-shell.xml` — only there because the layer-shell scanner output
@@ -310,7 +315,7 @@ FT_Set_Pixel_Sizes(g_ft_face, 0, size);
 - The pattern comes from `-f`, then `$WLNCH_FONT`, then `monospace` as
   default.
 - Pixel size comes from the matched pattern (so `monospace:size=20` works)
-  and falls back to `DEFAULT_FONT_PIXEL` (18).
+  and falls back to `DEFAULT_FONT_PIXEL` from `config.h`.
 
 We cache `face->size->metrics.height >> 6` (line height) and `ascender >> 6`
 (baseline offset from the row top) once. All metrics are in 26.6 fixed

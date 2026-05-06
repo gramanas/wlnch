@@ -28,7 +28,7 @@ $(PROTO_DIR)/%-client-protocol.h: $(PROTO_DIR)/%.xml
 $(PROTO_DIR)/%-protocol.c: $(PROTO_DIR)/%.xml
 	wayland-scanner private-code $< $@
 
-wlnch.o: wlnch.c $(PROTO_HEADERS)
+wlnch.o: wlnch.c config.h $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(PROTO_DIR)/%-protocol.o: $(PROTO_DIR)/%-protocol.c $(PROTO_HEADERS)

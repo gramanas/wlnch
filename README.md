@@ -32,6 +32,9 @@ make
 sudo make install   # installs to /usr/local/bin by default
 ```
 
+Compile-time defaults (font, colors, padding, row gap, etc.) live in
+[`config.h`](config.h); edit and recompile to retheme.
+
 ## Configuration
 
 Each non-blank, non-comment line is `KEY[&]:NAME:COMMAND`:
