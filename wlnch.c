@@ -73,6 +73,8 @@ struct entry {
     xkb_keysym_t  keysym;          /* matching xkb keysym */
     bool          sticky;          /* `KEY&:NAME:CMD` => keep running after spawn */
     bool          separator_after; /* a `---` line followed this entry */
+    bool          has_key_color;   /* `KEY#RRGGBB:` overrides the key letter color */
+    uint32_t      key_color;       /* ARGB, alpha forced to 0xFF; valid iff has_key_color */
     char         *name;
     char         *command;
 };
@@ -185,22 +187,49 @@ static void parse_config(FILE *f, const char *source) {
             continue;
         }
 
-        /* Field 1: KEY [&] then ':'.  An optional '&' between the key
-         * character and the colon marks the entry as sticky: the command
-         * runs but wlnch keeps running so the key can be pressed again. */
+        /* Field 1: KEY [&|#RRGGBB] then ':'.  Between the key character
+         * and the colon, an optional modifier may appear (mutually
+         * exclusive):
+         *   '&'        -> sticky entry: command runs but wlnch keeps
+         *                 running so the key can be pressed again.
+         *   '#RRGGBB'  -> override the key letter color (6 hex digits,
+         *                 alpha is always 0xFF). Sticky entries always
+         *                 use COLOR_KEY_STICKY, so this is rejected
+         *                 alongside '&'. */
         uint32_t cp;
         int klen = utf8_decode(p, &cp);
         if (klen == 0)
             die("config %s:%d: invalid UTF-8 in key", source, lineno);
 
-        bool sticky = false;
-        int  off = klen;
+        bool     sticky        = false;
+        bool     has_key_color = false;
+        uint32_t key_color     = 0;
+        int      off           = klen;
+
         if (p[off] == '&') {
             sticky = true;
             ++off;
+        } else if (p[off] == '#') {
+            ++off;
+            uint32_t rgb = 0;
+            for (int i = 0; i < 6; ++i) {
+                char c = p[off + i];
+                int  d;
+                if      (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else die("config %s:%d: expected 6 hex digits after '#'",
+                         source, lineno);
+                rgb = (rgb << 4) | (uint32_t)d;
+            }
+            off += 6;
+            key_color     = 0xFF000000u | rgb;
+            has_key_color = true;
         }
+
         if (p[off] != ':')
-            die("config %s:%d: expected ':' or '&:' after key",
+            die("config %s:%d: expected ':' after key "
+                "(with optional '&' or '#RRGGBB', not both)",
                 source, lineno);
 
         char *name_start = p + off + 1;
@@ -227,6 +256,8 @@ static void parse_config(FILE *f, const char *source) {
         g_entries[g_n_entries].keysym          = xkb_utf32_to_keysym(cp);
         g_entries[g_n_entries].sticky          = sticky;
         g_entries[g_n_entries].separator_after = false;
+        g_entries[g_n_entries].has_key_color   = has_key_color;
+        g_entries[g_n_entries].key_color       = key_color;
         g_entries[g_n_entries].name            = xstrdup(name);
         g_entries[g_n_entries].command         = xstrdup(cmd);
         ++g_n_entries;
@@ -525,9 +556,14 @@ static void render_frame(uint32_t *pixels, int w, int h) {
         char ch_buf[8];
         utf8_encode(g_entries[i].codepoint, ch_buf);
 
+        /* Sticky entries always use COLOR_KEY_STICKY so the visual cue
+         * for stickiness can't be overridden. Otherwise honour an
+         * optional per-entry `#RRGGBB`, falling back to COLOR_KEY. */
         uint32_t key_color = g_entries[i].sticky
             ? COLOR_KEY_STICKY
-            : COLOR_KEY;
+            : (g_entries[i].has_key_color
+                ? g_entries[i].key_color
+                : COLOR_KEY);
 
         x += draw_text(pixels, w, h, x, y, "[",    COLOR_SEP);
         x += draw_text(pixels, w, h, x, y, ch_buf, key_color);

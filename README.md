@@ -44,6 +44,11 @@ Each non-blank, non-comment line is `KEY[&]:NAME:COMMAND`:
   be pressed again (e.g. `o&:term:kitty` spawns a new terminal every
   time `o` is pressed). Sticky entries are highlighted with a reddish
   key letter in the rendered list.
+- An optional `#RRGGBB` between the key and the first `:` overrides
+  the key letter color (6 hex digits, alpha is always `FF`). For
+  example, `f#FF8800:firefox:firefox` paints the `f` orange. Mutually
+  exclusive with `&`: sticky entries always render with the sticky
+  color so the visual cue can't be hidden.
 - A line consisting solely of `---` inserts a blank-row visual
   separator between groups of entries. Leading, trailing, and
   consecutive `---` lines are no-ops.

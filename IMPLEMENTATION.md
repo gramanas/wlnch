@@ -118,8 +118,11 @@ KEY[&]:NAME:COMMAND
 - `KEY` is a single UTF-8 character (1–4 bytes).
 - An optional `&` between the key and the first `:` marks the entry as
   *sticky* (see below).
-- The first two `:` (after the optional `&`) are the field separators.
-  `COMMAND` may contain any number of `:`.
+- An optional `#RRGGBB` between the key and the first `:` overrides
+  the key letter color (see [Per-entry key color](#per-entry-key-color)).
+  Mutually exclusive with `&`.
+- The first two `:` (after the optional `&` or `#RRGGBB`) are the
+  field separators. `COMMAND` may contain any number of `:`.
 - Match is case-sensitive: `s` and `S` are different bindings (the latter
   requires Shift). This is achieved by converting the codepoint to an xkb
   keysym with `xkb_utf32_to_keysym`, which gives `XKB_KEY_s` vs `XKB_KEY_S`.
@@ -164,6 +167,28 @@ Implementation:
   of the regular `COLOR_KEY` (blue accent). Bracket geometry is identical
   for sticky and non-sticky rows, so all names align without padding
   tricks.
+
+### Per-entry key color
+
+A `#RRGGBB` modifier between the key character and the first `:`
+overrides the color of just the key letter for that entry. Six hex
+digits, case-insensitive; the alpha channel is always forced to
+`0xFF` (the spec doesn't carry one). Stored on `struct entry` as
+`bool has_key_color` plus a `uint32_t key_color` already packed as
+`0xFFRRGGBB`.
+
+Render-time precedence:
+
+1. Sticky entries always use `COLOR_KEY_STICKY`. The whole point of
+   the sticky color is to be a stable visual cue that the launcher
+   won't dismiss after a press; letting the config repaint it would
+   defeat that, so `#RRGGBB` and `&` are rejected together at parse
+   time.
+2. Otherwise, if `has_key_color`, use `key_color`.
+3. Otherwise fall back to `COLOR_KEY`.
+
+The `[` and `]` brackets always stay in `COLOR_SEP`, so the visual
+"this is a key" framing is consistent across rows.
 
 ### Where the config comes from
 

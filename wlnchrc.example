@@ -1,11 +1,14 @@
 #!/usr/local/bin/wlnch
-# Format: KEY[&]:NAME:COMMAND
+# Format: KEY[&|#RRGGBB]:NAME:COMMAND
 # - Lines beginning with '#' and blank lines are ignored.
 # - The first two ':' separate the fields; the COMMAND may contain ':'.
 # - KEY is a single character (case-sensitive: 's' and 'S' are different).
 # - A '&' between the KEY and the first ':' makes the entry sticky:
 #   the command runs but wlnch stays open, so the same key can be
 #   pressed again (e.g. to spawn multiple terminals).
+# - A '#RRGGBB' between the KEY and the first ':' overrides the color
+#   of the key letter (6 hex digits, alpha is always 0xFF). Mutually
+#   exclusive with '&': sticky entries always use the sticky color.
 # - A line containing just '---' inserts a blank-row visual separator
 #   between groups of entries.
 # - ESC and Ctrl-G always exit without running anything.
@@ -13,8 +16,8 @@
 e:emacs:emacsclient -swork -c -a ""
 t:emacs-todo:uwsm app -- emacsclient -stodo -c -a ""
 ---
-f:firefox:uwsm app -- firefox
+f#FF8800:firefox:uwsm app -- firefox
 s:grim:uwsm app -- bash -c 'grim -g "$(slurp -d)" - | wl-copy -t image/png'
-S:slack:uwsm app -- slack
+S#4A154B:slack:uwsm app -- slack
 ---
 o&:term:kitty
