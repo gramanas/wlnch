@@ -373,9 +373,36 @@ pad x to (PADDING_X + key_cell_w + KEY_GAP)
 name in COLOR_FG
 ```
 
-Pixel colors are compile-time constants near the top of the file. Theming
-via the config file is intentionally out of scope; the natural extension is
-to add `bg=`, `fg=`, `accent=` directives to the parser.
+Pixel colors are compile-time constants in `config.h`. Theming via the
+config file is intentionally out of scope; the natural extension is to
+add `bg=`, `fg=`, `accent=` directives to the parser.
+
+### Rounded corners
+
+After the background fill and the per-row text drawing, `render_frame`
+calls `apply_rounded_corners(pixels, w, h, CORNER_RADIUS)`. The pass:
+
+1. Walks an `r × r` square in each of the four corners (where
+   `r = min(CORNER_RADIUS, w/2, h/2)`).
+2. For each pixel, computes the distance from its center to the
+   corresponding corner-arc center (which sits `r` pixels in from each
+   edge).
+3. Pixels strictly inside the disc keep the background unchanged.
+   Pixels strictly outside become fully transparent (`0x00000000`).
+   Pixels in the 1-pixel boundary band have their alpha scaled by
+   `r + 0.5 − dist` for cheap anti-aliasing. RGB is left alone (we use
+   straight alpha throughout).
+
+The visual round-corner effect comes entirely from those alpha-zero
+pixels: Wayland surfaces are always rectangular, but the compositor
+honors per-pixel alpha and draws whatever is behind the transparent
+corners. We deliberately *do not* call `wl_surface.set_opaque_region`,
+so this works without any protocol coordination.
+
+Setting `CORNER_RADIUS = 0` early-returns from the helper, restoring
+sharp rectangular corners with zero overhead. Excessively large
+values are silently clamped to `min(w/2, h/2)`, which produces a
+fully circular / stadium-shaped window rather than failing.
 
 ## Keyboard handling
 

@@ -68,7 +68,7 @@
  * brackets nearly invisible, which keeps focus on the key letter;
  * lighten this for a more pronounced bracket frame.
  * Default: 0xFF000000 (opaque black). */
-#define COLOR_SEP        0xFF000000U
+#define COLOR_SEP        0xF0242424U
 
 /* ---------- Layout (pixels) ---------- */
 
@@ -96,5 +96,14 @@
  * width between the key column and the name column.
  * Default: 18. */
 #define KEY_GAP   18
+
+/* Radius (in pixels) of the four window corners. The corner pixels
+ * outside the rounded mask are written as fully transparent so the
+ * compositor draws what's behind them. Setting this to 0 disables
+ * the corner mask entirely (sharp rectangular window). The value is
+ * silently clamped to half the smaller window dimension, so a huge
+ * radius just gives a fully circular / stadium-shaped window.
+ * Default: 12. */
+#define CORNER_RADIUS 18
 
 #endif /* WLNCH_CONFIG_H */

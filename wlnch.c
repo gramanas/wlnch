@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -511,6 +512,59 @@ static void fill_rect(uint32_t *pixels, int w, int h, uint32_t color) {
     for (int i = 0; i < n; ++i) pixels[i] = color;
 }
 
+/* Punch transparent pixels into the four window corners so the surface
+ * appears rounded. Each corner is masked against a quarter circle of
+ * radius `radius`; pixels strictly outside the circle are zeroed,
+ * and the 1-pixel boundary band is alpha-faded for cheap AA. The
+ * compositor then composites whatever is behind those transparent
+ * pixels, giving the illusion of a non-rectangular window.
+ *
+ * Only the alpha channel is scaled for AA pixels. The current bg uses
+ * straight alpha (matching how text glyphs are blended elsewhere in
+ * this file), so we don't need to also scale RGB. */
+static void apply_rounded_corners(uint32_t *pixels, int w, int h, int radius) {
+    if (radius <= 0) return;
+
+    int r = radius;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    for (int j = 0; j < r; ++j) {
+        for (int i = 0; i < r; ++i) {
+            /* Distance from the pixel center to the corner's arc center.
+             * The arc center sits `r` pixels in from each edge, so for
+             * the top-left corner the arc center is at (r, r) and the
+             * pixel at index (i, j) has its center at (i+0.5, j+0.5). */
+            float dx = (float)r - 0.5f - (float)i;
+            float dy = (float)r - 0.5f - (float)j;
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            float coverage;
+            if (dist <= (float)r - 0.5f)      coverage = 1.0f;
+            else if (dist >= (float)r + 0.5f) coverage = 0.0f;
+            else                              coverage = (float)r + 0.5f - dist;
+
+            if (coverage >= 1.0f) continue; /* fully inside the disc */
+
+            /* Mirror to all four corners. */
+            int xs[4] = { i,         w - 1 - i, i,         w - 1 - i };
+            int ys[4] = { j,         j,         h - 1 - j, h - 1 - j };
+
+            for (int k = 0; k < 4; ++k) {
+                int x = xs[k], y = ys[k];
+                if (coverage <= 0.0f) {
+                    pixels[y * w + x] = 0x00000000U;
+                } else {
+                    uint32_t p  = pixels[y * w + x];
+                    uint32_t a  = (p >> 24) & 0xFFu;
+                    uint32_t na = (uint32_t)((float)a * coverage + 0.5f);
+                    pixels[y * w + x] = (na << 24) | (p & 0x00FFFFFFu);
+                }
+            }
+        }
+    }
+}
+
 static void render_frame(uint32_t *pixels, int w, int h) {
     fill_rect(pixels, w, h, COLOR_BG);
 
@@ -561,6 +615,8 @@ static void render_frame(uint32_t *pixels, int w, int h) {
         if (g_entries[i].separator_after && i + 1 < g_n_entries)
             y += row_h;
     }
+
+    apply_rounded_corners(pixels, w, h, CORNER_RADIUS);
 }
 
 static void draw_and_attach(void) {
