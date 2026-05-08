@@ -17,13 +17,16 @@ in [`README.md`](README.md); this file is the *internals*.
   documented `#define`s, included near the top of `wlnch.c`. The
   Makefile lists `config.h` as a dependency of `wlnch.o`, so editing
   it triggers a rebuild on the next `make`.
-- A sibling binary [`wnpt`](wnpt.c) — a minimal text-input prompt that
-  prints typed text to stdout on commit — is built from the same
-  repository. It shares only `config.h` with `wlnch`; the Wayland /
-  FreeType / SHM code is intentionally duplicated rather than
-  factored into a library, so each tool stays a single self-contained
-  translation unit. The end of this document has a short
-  [wnpt section](#wnpt) covering only the parts that differ.
+- Two sibling binaries built from the same repository:
+  - [`wnpt`](wnpt.c) — a text-input prompt with readline editing that
+    prints typed text to stdout on commit. See the
+    [wnpt section](#wnpt).
+  - [`wout`](wout.c) — a stdin viewer that displays piped content in
+    the overlay and exits on dismissal. See the [wout section](#wout).
+  - Both share only `config.h` with `wlnch`; the Wayland / FreeType /
+    SHM code is intentionally duplicated rather than factored into a
+    library, so each tool stays a single self-contained translation
+    unit.
 - Two vendored protocol XMLs under [`protocols/`](protocols/):
   - `wlr-layer-shell-unstable-v1.xml` — the actual protocol used.
   - `xdg-shell.xml` — only there because the layer-shell scanner output
@@ -716,3 +719,105 @@ doesn't already end with one (so files always end well-formed). An
 empty committed buffer prints nothing. The process exit code mirrors
 the cancel/commit decision: `0` for Enter, `1` for Esc / Ctrl-G /
 surface-closed.
+
+## wout
+
+`wout` ("Wayland out") is the third sibling, built from
+[`wout.c`](wout.c). It opens the same kind of overlay layer-surface
+as `wlnch` / `wnpt` and reuses the same visual constants from
+`config.h`, but its own sizing block (`WOUT_MIN_WIDTH`,
+`WOUT_MAX_WIDTH`, `WOUT_MAX_HEIGHT`) so it can be tuned independently
+of the prompt.
+
+Like the other tools it's a single TU and the Wayland / FreeType /
+SHM scaffolding is copied rather than factored. This section covers
+only the parts that differ.
+
+### Lifecycle: read once, render once
+
+`wout` is closer to `wlnch` than to `wnpt`: the content is fixed
+at startup and the window never re-renders. `main` slurps stdin
+into a growable `char *g_text` (doubling capacity, trailing `\n` /
+`\r` stripped so `echo`-style input doesn't grow an empty bottom
+row), measures it once with `compute_window_size`, and the rest of
+the program is the standard "configure → ack → attach buffer →
+dispatch keys" loop with `g_buffer_attached` gating the single draw.
+There's no `wl_buffer.release` listener — the lone buffer is freed
+implicitly when the Wayland connection tears down on exit.
+
+### Stdin guard
+
+`main` calls `isatty(STDIN_FILENO)` first thing and refuses with a
+clear error if stdin is a tty. Without this guard, a bare `wout`
+launched from a hotkey or a scratchpad would silently block on
+terminal stdin, which looks like a hang. Pipes and file
+redirections (the only sensible inputs) pass the check.
+
+### Sizing
+
+`compute_window_size` walks the buffer once to find:
+
+- `n_lines` — number of `\n`-delimited segments (always at least 1);
+- `max_line_w` — pixel width of the widest segment.
+
+Then:
+
+```
+W = clamp(max_line_w + 2*PADDING_X,            WOUT_MIN_WIDTH,  WOUT_MAX_WIDTH)
+H = clamp(2*PADDING_Y + n_lines*row_h - ROW_GAP,
+          0,               WOUT_MAX_HEIGHT)
+```
+
+`row_h = line_height + ROW_GAP`. Both axes round up to multiples of
+two to keep the buffer stride sane. Anything past the cap clips
+silently — `blit_glyph` already does per-pixel bounds checks, so
+overflowing rows / columns are simply truncated instead of trying to
+wrap or scroll.
+
+### Key dispatch
+
+Read-only viewer, so the dispatch is one branch: any of `Esc`,
+`Return`, `KP_Enter`, `space`, `q`, `Q`, or `Ctrl+G` sets
+`g_running = 0`. The keysym is resolved against layout 0 (same trick
+as `wlnch`) so the Latin `q` dismissal works even when the user is
+on a non-Latin layout.
+
+### Auto-close timeout
+
+`wout -t MS` (or `--timeout MS`, parsed via `getopt_long`) closes
+the window after `MS` milliseconds. `0` (the default) means "no
+timeout" — the window blocks until the user dismisses it. The CLI
+parser (`parse_ms`) rejects empty / non-numeric / negative /
+out-of-range values with a clear error.
+
+Implementation replaces the simple `wl_display_dispatch` blocking
+loop with the standard prepare-read / `poll(2)` cycle:
+
+```
+clock_gettime(CLOCK_MONOTONIC, &start);
+while (g_running) {
+    wait_ms = (g_timeout_ms > 0) ? (g_timeout_ms - elapsed) : -1;
+    if (wait_ms <= 0 with timeout set) break;
+
+    while (wl_display_prepare_read(d) != 0)
+        wl_display_dispatch_pending(d);
+    wl_display_flush(d);
+
+    poll({ wl_display_get_fd(d), POLLIN }, wait_ms);
+    on timeout (n == 0) → wl_display_cancel_read + break;
+    on POLLIN          → wl_display_read_events + dispatch_pending;
+    on POLLERR/POLLHUP → cancel + break;
+}
+```
+
+The countdown starts when we enter the loop, just before the first
+`wl_display_flush`. The configure round-trip + initial draw happens
+on the first `poll`/`read_events` iteration, so a sub-second timeout
+on a slow compositor could fire before the user actually sees the
+window. For typical timeouts (≥ 1 second) the difference is
+imperceptible.
+
+Each iteration recomputes `wait_ms = g_timeout_ms − elapsed` from
+`CLOCK_MONOTONIC` so spurious wakeups (e.g. `EINTR`) don't reset the
+deadline. `EINTR` is handled by `continue`-ing the loop with the
+remaining timeout.

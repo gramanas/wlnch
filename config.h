@@ -139,4 +139,26 @@
  * Default: 1200. */
 #define WNPT_MAX_WIDTH 1200
 
+/* ---------- wout (stdin viewer) ---------- */
+
+/* Minimum width (in pixels) of the wout window. Floors the
+ * window even when the piped input is short, so the result still
+ * looks like a deliberate dialog rather than a pixel-thin sliver.
+ * Default: 480. */
+#define WOUT_MIN_WIDTH  480
+
+/* Maximum width (in pixels) of the wout window. Long lines clip
+ * at the right edge rather than growing the window past the
+ * screen. Larger than WNPT_MAX_WIDTH because wout commonly shows
+ * pre-formatted output like `git log` or `man` excerpts.
+ * Default: 1600. */
+#define WOUT_MAX_WIDTH  1600
+
+/* Maximum height (in pixels) of the wout window. If the piped
+ * input has more lines than fit, rows past this height clip
+ * silently — there is no scrolling. Pipe through `head` if you
+ * only want the top of a long file.
+ * Default: 1000. */
+#define WOUT_MAX_HEIGHT 1000
+
 #endif /* WLNCH_CONFIG_H */

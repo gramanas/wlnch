@@ -7,10 +7,15 @@ runs the chosen command, and exits.
 It's a Wayland counterpart to `xlnch` and uses the same `KEY:NAME:COMMAND`
 config format.
 
-This repository also builds a sibling utility, [`wnpt`](#wnpt) — a minimal
-note prompt that opens the same kind of overlay window but reads arbitrary
-typed text from the keyboard and prints it to stdout when the user presses
-Enter.
+This repository also builds two sibling utilities that share the same
+overlay-window look:
+
+- [`wnpt`](#wnpt) — a minimal note prompt with readline-style line
+  editing. Reads typed text from the keyboard and prints it to stdout
+  when the user presses Enter.
+- [`wout`](#wout) — a stdin viewer. Slurps stdin, displays it in the
+  overlay, and dismisses on any of `Esc` / `Enter` / `q` / `Space` /
+  `Ctrl+G`.
 
 ## Compositor support
 
@@ -153,6 +158,56 @@ area, rendered in `COLOR_PROMPT` (defaults to the same accent blue
 `wlnch` uses for keys). The prompt is purely visual — it never enters
 the buffer and is never written to stdout. Multi-line prompts are
 rejected with a clear error.
+
+## wout
+
+`wout` ("Wayland out") is the third sibling. It reads all of stdin into
+memory at startup, opens an overlay layer-surface that looks like
+`wlnch` / `wnpt`, renders the text statically, and exits when the user
+dismisses the window. There is no editing, no cursor, no scrolling —
+strictly a "show this and wait" dialog.
+
+Dismiss any of: `Esc`, `Enter`, `q`, `Space`, `Ctrl+G`.
+
+Typical usage:
+
+```sh
+echo "build finished"     | wout
+git log --oneline -10     | wout
+date                      | wout
+
+# show the result of a long-running command when it's done
+( make 2>&1; echo "exit=$?" ) | wout
+
+# auto-close after 3 seconds (toast-style notification)
+echo "saved!"             | wout -t 3000
+date '+%H:%M:%S'          | wout --timeout 1500
+```
+
+Flags:
+
+- `-f FONT` / `--font FONT` — fontconfig pattern (env: `$WOUT_FONT`,
+  then `$WLNCH_FONT`).
+- `-t MS` / `--timeout MS` — auto-close after `MS` milliseconds. The
+  default `0` means "no timeout"; the window stays open until the
+  user dismisses it.
+
+`wout` refuses to read from a tty (so a bare `wout` doesn't silently
+hang on terminal stdin); use a pipe or a redirection.
+
+Sizing:
+
+- Width grows to fit the widest line, clamped to
+  `[WOUT_MIN_WIDTH, WOUT_MAX_WIDTH]`.
+- Height grows linearly with line count, clamped to
+  `WOUT_MAX_HEIGHT`.
+- Long lines clip at the right edge; rows past the height cap clip
+  at the bottom. Pipe through `head` / `cut` if you only want the
+  beginning of a long file.
+
+Visual styling and the height/width caps are tunable in
+[`config.h`](config.h). The font can also be overridden per-run with
+`-f FONT` or via `$WOUT_FONT` (falling back to `$WLNCH_FONT`).
 
 ## Why not GNOME?
 

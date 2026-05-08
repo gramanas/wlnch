@@ -20,8 +20,9 @@ PROTO_OBJS = $(PROTO_SOURCES:.c=.o)
 
 WLNCH_OBJS = wlnch.o $(PROTO_OBJS)
 WNPT_OBJS  = wnpt.o  $(PROTO_OBJS)
+WOUT_OBJS  = wout.o  $(PROTO_OBJS)
 
-all: wlnch wnpt
+all: wlnch wnpt wout
 
 $(PROTO_DIR)/%-client-protocol.h: $(PROTO_DIR)/%.xml
 	wayland-scanner client-header $< $@
@@ -35,6 +36,9 @@ wlnch.o: wlnch.c config.h $(PROTO_HEADERS)
 wnpt.o: wnpt.c config.h $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+wout.o: wout.c config.h $(PROTO_HEADERS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(PROTO_DIR)/%-protocol.o: $(PROTO_DIR)/%-protocol.c $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -44,15 +48,20 @@ wlnch: $(WLNCH_OBJS)
 wnpt: $(WNPT_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(WNPT_OBJS) $(LDLIBS)
 
-install: wlnch wnpt
+wout: $(WOUT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(WOUT_OBJS) $(LDLIBS)
+
+install: wlnch wnpt wout
 	install -Dm755 wlnch $(DESTDIR)$(BINDIR)/wlnch
 	install -Dm755 wnpt  $(DESTDIR)$(BINDIR)/wnpt
+	install -Dm755 wout  $(DESTDIR)$(BINDIR)/wout
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/wlnch
 	rm -f $(DESTDIR)$(BINDIR)/wnpt
+	rm -f $(DESTDIR)$(BINDIR)/wout
 
 clean:
-	rm -f wlnch wnpt *.o $(PROTO_OBJS) $(PROTO_HEADERS) $(PROTO_SOURCES)
+	rm -f wlnch wnpt wout *.o $(PROTO_OBJS) $(PROTO_HEADERS) $(PROTO_SOURCES)
 
 .PHONY: all install uninstall clean
