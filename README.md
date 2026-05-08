@@ -70,6 +70,25 @@ Each non-blank, non-comment line is `KEY[&]:NAME:COMMAND`:
 
 See [`wlnchrc.example`](wlnchrc.example) for a sample.
 
+### Emacs major mode
+
+[`wlnch.el`](wlnch.el) provides a minor-overhead major mode for editing
+config files in Emacs:
+
+- `#`-prefixed lines render as comments; the `#!` shebang on line 1
+  gets a distinct face.
+- `---` separator lines are highlighted.
+- `#RRGGBB` modifiers preview their colour inline (the hex value is
+  used as the background, with a black or white foreground chosen for
+  contrast — same trick as `css-mode`).
+- The `COMMAND` portion of every entry is fontified as Bash by
+  piggy-backing on `sh-mode`, so quoting, variable expansion, and
+  redirection all light up the way you'd expect.
+
+It auto-activates for files named `wlnchrc`, `.wlnchrc`, or
+`wlnchrc.<anything>`, and for any file whose shebang interpreter is
+`wlnch`. Drop it on your `load-path` and `(require 'wlnch)`.
+
 ## Usage
 
 ```sh

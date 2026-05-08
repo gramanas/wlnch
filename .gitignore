@@ -6,3 +6,4 @@ protocols/wlr-layer-shell-unstable-v1-protocol.o
 protocols/xdg-shell-client-protocol.h
 protocols/xdg-shell-protocol.o
 *.o
+*.elc
