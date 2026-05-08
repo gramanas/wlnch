@@ -106,4 +106,30 @@
  * Default: 12. */
 #define CORNER_RADIUS 18
 
+/* ---------- wnpt (note prompt) ---------- */
+
+/* Color of the cursor bar drawn at the end of the typed text in
+ * wnpt. By default it tracks COLOR_FG so the cursor matches the
+ * text color; override for a more / less prominent caret.
+ * Default: COLOR_FG. */
+#define CURSOR_COLOR COLOR_FG
+
+/* Width (in pixels) of the cursor bar.
+ * Default: 2. */
+#define CURSOR_WIDTH 2
+
+/* Minimum width (in pixels) of the wnpt window. Used as the floor
+ * even when the typed text is short or the buffer is empty, so the
+ * prompt always presents a usable text area. Pure-text mode has
+ * no key-label column to anchor a sensible width otherwise.
+ * Default: 480. */
+#define WNPT_MIN_WIDTH 480
+
+/* Maximum width (in pixels) of the wnpt window. Lines longer than
+ * this clip at the right edge instead of growing the window past
+ * the screen. There is no scrolling or wrapping; a long line just
+ * runs off the end of the visible area until you delete or newline.
+ * Default: 1200. */
+#define WNPT_MAX_WIDTH 1200
+
 #endif /* WLNCH_CONFIG_H */

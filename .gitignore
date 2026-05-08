@@ -1,6 +1,7 @@
 wlnch
+wnpt
 protocols/wlr-layer-shell-unstable-v1-client-protocol.h
 protocols/wlr-layer-shell-unstable-v1-protocol.o
 protocols/xdg-shell-client-protocol.h
 protocols/xdg-shell-protocol.o
-wlnch.o
+*.o

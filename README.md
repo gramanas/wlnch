@@ -7,6 +7,11 @@ runs the chosen command, and exits.
 It's a Wayland counterpart to `xlnch` and uses the same `KEY:NAME:COMMAND`
 config format.
 
+This repository also builds a sibling utility, [`wnpt`](#wnpt) — a minimal
+note prompt that opens the same kind of overlay window but reads arbitrary
+typed text from the keyboard and prints it to stdout when the user presses
+Enter.
+
 ## Compositor support
 
 `wlnch` requires the `wlr-layer-shell-unstable-v1` protocol so that the surface
@@ -88,6 +93,34 @@ The window appears centered, grabs the keyboard, and:
 - pressing any other key is ignored.
 
 The font can also be set via the `WLNCH_FONT` environment variable.
+
+## wnpt
+
+`wnpt` ("Wayland note prompt") is a companion binary built from the same
+repo. It opens an overlay layer-surface that looks like a `wlnch` window
+but renders no preset entries — instead it accepts arbitrary text from
+the keyboard and prints the buffer to stdout on commit.
+
+Keys:
+
+- typing inserts UTF-8 (your current keyboard layout is honored, including
+  Shift / CapsLock / dead keys);
+- `Enter` commits: the buffered text is printed to stdout, exit 0;
+- `Shift+Enter` inserts a newline into the buffer;
+- `Backspace` deletes the previous codepoint, `Ctrl+Backspace` deletes the
+  previous word, `Ctrl+U` clears the buffer;
+- `Esc` or `Ctrl+G` aborts: nothing is printed, exit 1.
+
+Typical usage:
+
+```sh
+wnpt > note.txt          # capture a quick note to a file
+echo "hello $(wnpt)"     # interpolate a typed value into a command
+```
+
+Visual styling (font, colors, padding, corner radius, cursor) is shared
+with `wlnch` via `config.h`. The font can also be overridden per-run with
+`-f FONT` or via `$WNPT_FONT` (falling back to `$WLNCH_FONT`).
 
 ## Why not GNOME?
 

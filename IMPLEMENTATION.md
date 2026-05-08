@@ -17,6 +17,13 @@ in [`README.md`](README.md); this file is the *internals*.
   documented `#define`s, included near the top of `wlnch.c`. The
   Makefile lists `config.h` as a dependency of `wlnch.o`, so editing
   it triggers a rebuild on the next `make`.
+- A sibling binary [`wnpt`](wnpt.c) — a minimal text-input prompt that
+  prints typed text to stdout on commit — is built from the same
+  repository. It shares only `config.h` with `wlnch`; the Wayland /
+  FreeType / SHM code is intentionally duplicated rather than
+  factored into a library, so each tool stays a single self-contained
+  translation unit. The end of this document has a short
+  [wnpt section](#wnpt) covering only the parts that differ.
 - Two vendored protocol XMLs under [`protocols/`](protocols/):
   - `wlr-layer-shell-unstable-v1.xml` — the actual protocol used.
   - `xdg-shell.xml` — only there because the layer-shell scanner output
@@ -542,3 +549,82 @@ Roughly in order of usefulness:
    prefix character, e.g. press `m` to enter a media submenu.
 6. **Frame callback + buffer release tracking**: needed for any of (2), (3),
    (4) to be done correctly — we currently leak the single buffer at exit.
+
+## wnpt
+
+`wnpt` ("Wayland note prompt") is a sibling binary built from
+[`wnpt.c`](wnpt.c). It opens the same kind of overlay layer-surface as
+`wlnch` and uses the same visual constants (everything in `config.h`
+under both the shared section and the dedicated `wnpt (note prompt)`
+block — `CURSOR_COLOR`, `CURSOR_WIDTH`, `WNPT_MIN_WIDTH`,
+`WNPT_MAX_WIDTH`).
+
+Because the two tools are intentionally kept as standalone single-TU
+programs, `wnpt.c` copies most of `wlnch.c` rather than refactoring
+into a shared library: globals, FreeType / fontconfig setup, glyph
+blending, SHM allocation, registry / seat / keyboard / layer-surface
+listeners. This section covers only the parts that genuinely differ.
+
+### Mode and key dispatch
+
+`wnpt` is a text-input prompt, so:
+
+- The keysym is resolved via `xkb_state_key_get_one_sym` (honoring the
+  current layout group), not via the layout-0 trick `wlnch` uses for
+  layout-independent bindings. Cyrillic / Greek / Dvorak users get their
+  native script when typing into the prompt.
+- For "regular" keys, the inserted text comes from
+  `xkb_state_key_get_utf8`, which already handles Shift, CapsLock, dead
+  keys, and so on. ASCII control characters in the result (other than
+  `\t`) are filtered before insertion.
+- Special keys are intercepted before the UTF-8 path:
+  - `XKB_KEY_Return` / `XKB_KEY_KP_Enter` without Shift sets
+    `g_committed = 1` and exits the loop;
+  - the same keysym with Shift appends a literal `\n` to the buffer;
+  - `XKB_KEY_BackSpace` deletes the trailing UTF-8 codepoint (or trailing
+    word with Ctrl);
+  - `Ctrl+U` clears the buffer;
+  - `Esc` and `Ctrl-G` exit without committing.
+
+### Text buffer
+
+A single growable `char *g_text` (doubling capacity, always
+nul-terminated). `buf_pop_codepoint` walks back over UTF-8 continuation
+bytes (`10xxxxxx`) and then one start byte, so a multi-byte glyph is
+removed as a unit.
+
+### Dynamic resize
+
+Unlike `wlnch`, the window content changes on every keystroke, so
+`render_frame` is invoked many times. After each buffer mutation,
+`schedule_redraw` re-runs `compute_window_size`:
+
+- if the dimensions changed, it calls
+  `zwlr_layer_surface_v1_set_size(new_w, new_h)` + `wl_surface_commit`
+  and lets the next `configure` event drive the actual draw;
+- if the dimensions are unchanged, it just attaches a fresh buffer
+  immediately.
+
+Width grows to fit the widest line, clamped to `[WNPT_MIN_WIDTH,
+WNPT_MAX_WIDTH]`. Height grows linearly with the line count. Long
+lines past `WNPT_MAX_WIDTH` clip at the right edge — there is no
+wrapping or scrolling, this is a one-shot prompt.
+
+### SHM buffer release tracking
+
+Because we draw repeatedly, leaking buffers like `wlnch` does would
+mean one mmap per keystroke. Each `wl_buffer` therefore carries a
+small `struct buf_data { void *mem; size_t size; }` as user data, and
+the `wl_buffer.release` listener munmaps the backing memory and
+destroys the buffer object. This is the "Frame callback + buffer
+release tracking" item from the `wlnch` future-work list, applied
+where it actually matters.
+
+### Commit semantics
+
+When the loop exits with `g_committed == 1`, `main` writes
+`g_text[0..g_text_len)` to `stdout` and appends a `\n` if the buffer
+doesn't already end with one (so files always end well-formed). An
+empty committed buffer prints nothing. The process exit code mirrors
+the cancel/commit decision: `0` for Enter, `1` for Esc / Ctrl-G /
+surface-closed.
