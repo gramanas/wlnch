@@ -2,14 +2,43 @@
  * wnpt - tiny Wayland note prompt, companion to wlnch.
  *
  * Opens an OVERLAY layer-shell window, grabs the keyboard exclusively,
- * and lets the user type arbitrary UTF-8 text. Special keys:
+ * and lets the user type arbitrary UTF-8 text with readline-style
+ * editing. The cursor lives at an arbitrary byte offset inside the
+ * buffer (not just the end), and a single-slot kill ring with
+ * consecutive-kill accumulation supports yank.
+ *
+ * Submission:
  *
  *   Enter           commit: print the buffer to stdout and exit 0.
  *   Shift+Enter     insert a newline into the buffer.
- *   Backspace       delete the last codepoint.
- *   Ctrl+Backspace  delete the previous word.
- *   Ctrl+U          clear the entire buffer.
  *   Esc / Ctrl+G    abort: exit 1, nothing is written to stdout.
+ *
+ * An optional prompt string can be displayed at the start of the
+ * first row via `-p PROMPT`. The prompt is purely visual: it never
+ * appears in the buffer and is never written to stdout, only the
+ * typed text is.
+ *
+ * Cursor movement:
+ *
+ *   Ctrl+B / Left           one char back
+ *   Ctrl+F / Right          one char forward
+ *   Alt+B  / Ctrl+Left      one word back
+ *   Alt+F  / Ctrl+Right     one word forward
+ *   Ctrl+A / Home           beginning of current line
+ *   Ctrl+E / End            end of current line
+ *   Up / Down               previous / next line, same column
+ *
+ * Editing:
+ *
+ *   Backspace / Ctrl+H      delete previous char
+ *   Delete    / Ctrl+D      delete next char
+ *   Ctrl+W / Ctrl+Backspace / Alt+Backspace
+ *                           kill previous word (into kill ring)
+ *   Alt+D                   kill next word (into kill ring)
+ *   Ctrl+K                  kill to end of line
+ *   Ctrl+U                  kill to beginning of line
+ *   Ctrl+Y                  yank (paste) the kill ring at point
+ *   Ctrl+T                  transpose the two chars around point
  *
  * Typical usage:
  *
@@ -22,9 +51,9 @@
  * library. Sections (numbered to mirror wlnch.c):
  *
  *   1. Includes
- *   2. Globals (text buffer, wayland, xkb, font, window state)
+ *   2. Globals (text buffer, cursor, kill ring, wayland, xkb, font)
  *   3. Utility helpers (UTF-8, OOM)
- *   4. Text buffer
+ *   4. Text buffer + cursor + kill ring
  *   5. Font / text rendering
  *   6. SHM buffer with release tracking
  *   7. Drawing
@@ -65,10 +94,32 @@
 /* ---------- 2. Globals ---------- */
 
 /* The typed text. Always nul-terminated when len > 0; cap > len + 1.
- * Newlines in the buffer are real '\n' bytes inserted by Shift+Enter. */
+ * Newlines in the buffer are real '\n' bytes inserted by Shift+Enter.
+ * `g_cursor` is a byte offset in [0, g_text_len]; insertions and
+ * deletions act relative to it. */
 static char   *g_text;
 static size_t  g_text_len;
 static size_t  g_text_cap;
+static size_t  g_cursor;
+
+/* Single-slot kill ring. Consecutive kill commands accumulate into
+ * the same buffer (forward kills append, backward kills prepend), so
+ * a sequence like Ctrl+K Ctrl+K Ctrl+Y restores everything as one
+ * paste. `g_last_was_kill` is reset at the top of every key handler
+ * and re-asserted by each kill_*() helper. */
+static char   *g_kill;
+static size_t  g_kill_len;
+static size_t  g_kill_cap;
+static bool    g_last_was_kill;
+
+/* Optional `-p PROMPT` string shown at the start of the first row,
+ * in COLOR_PROMPT. Purely visual — it never enters g_text and is
+ * never printed on commit. `g_prompt_w` is the prompt's pixel
+ * width, cached after font init. The prompt is single-line: '\n'
+ * is rejected at parse time. */
+static const char *g_prompt;
+static size_t      g_prompt_len;
+static int         g_prompt_w;
 
 static struct wl_display            * g_display;
 static struct wl_registry           * g_registry;
@@ -133,9 +184,121 @@ static int utf8_decode_n(const char *s, size_t max, uint32_t *out) {
     return 0;
 }
 
-/* ---------- 4. Text buffer ---------- */
+/* ---------- 4. Text buffer + cursor + kill ring ---------- */
 
-static void buf_append(const char *s, size_t n) {
+/* --- UTF-8 codepoint stepping inside g_text --- */
+
+/* Byte offset of the start of the codepoint immediately before `pos`.
+ * Walks backward over continuation bytes (10xxxxxx) then one start
+ * byte. Returns 0 if `pos` is already at the buffer start. */
+static size_t prev_codepoint(size_t pos) {
+    if (pos == 0) return 0;
+    --pos;
+    while (pos > 0 && (((unsigned char)g_text[pos] & 0xC0) == 0x80))
+        --pos;
+    return pos;
+}
+
+/* Byte offset just past the codepoint that starts at `pos`. Walks
+ * forward one byte then over continuation bytes. Returns g_text_len
+ * if `pos` is at end-of-buffer. */
+static size_t next_codepoint(size_t pos) {
+    if (pos >= g_text_len) return g_text_len;
+    ++pos;
+    while (pos < g_text_len && (((unsigned char)g_text[pos] & 0xC0) == 0x80))
+        ++pos;
+    return pos;
+}
+
+/* Number of codepoints (not bytes) in g_text[start..end). Used as the
+ * "column" coordinate for Up/Down line motion. */
+static size_t codepoints_in(size_t start, size_t end) {
+    size_t n = 0;
+    while (start < end) {
+        start = next_codepoint(start);
+        ++n;
+    }
+    return n;
+}
+
+/* Advance from `start` by up to `n` codepoints, clamped at `end`. */
+static size_t advance_codepoints(size_t start, size_t end, size_t n) {
+    while (n > 0 && start < end) {
+        size_t next = next_codepoint(start);
+        if (next > end) break;
+        start = next;
+        --n;
+    }
+    return start;
+}
+
+/* --- Line bounds inside g_text (lines are '\n'-delimited) --- */
+
+static size_t line_start_at(size_t pos) {
+    while (pos > 0 && g_text[pos - 1] != '\n') --pos;
+    return pos;
+}
+
+static size_t line_end_at(size_t pos) {
+    while (pos < g_text_len && g_text[pos] != '\n') ++pos;
+    return pos;
+}
+
+/* --- Word boundaries (readline-style) ---
+ *
+ * "Word char" = ASCII alphanumeric, underscore, or any byte >= 0x80
+ * (so multi-byte UTF-8 characters and continuation bytes are all
+ * treated as word). Everything else (spaces, ASCII punctuation,
+ * control bytes) is a separator. */
+static bool is_word_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') ||
+           c == '_' ||
+           c >= 0x80;
+}
+
+static size_t word_back(size_t pos) {
+    while (pos > 0 && !is_word_byte((unsigned char)g_text[pos - 1])) --pos;
+    while (pos > 0 &&  is_word_byte((unsigned char)g_text[pos - 1])) --pos;
+    return pos;
+}
+
+static size_t word_forward(size_t pos) {
+    while (pos < g_text_len &&
+           !is_word_byte((unsigned char)g_text[pos])) ++pos;
+    while (pos < g_text_len &&
+            is_word_byte((unsigned char)g_text[pos])) ++pos;
+    return pos;
+}
+
+/* --- Cursor movement (vertical) --- */
+
+static void cursor_up(void) {
+    size_t ls = line_start_at(g_cursor);
+    if (ls == 0) return;
+    size_t col = codepoints_in(ls, g_cursor);
+    size_t prev_end   = ls - 1;            /* the '\n' that ended prev line */
+    size_t prev_start = line_start_at(prev_end);
+    g_cursor = advance_codepoints(prev_start, prev_end, col);
+}
+
+static void cursor_down(void) {
+    size_t le = line_end_at(g_cursor);
+    if (le == g_text_len) return;
+    size_t ls  = line_start_at(g_cursor);
+    size_t col = codepoints_in(ls, g_cursor);
+    size_t next_start = le + 1;
+    size_t next_end   = line_end_at(next_start);
+    g_cursor = advance_codepoints(next_start, next_end, col);
+}
+
+/* --- Buffer mutation (cursor-aware) --- */
+
+/* Insert `n` bytes from `s` at the current cursor position; advance
+ * the cursor past the insertion. */
+static void buf_insert(const char *s, size_t n) {
+    if (n == 0) return;
     if (g_text_len + n + 1 > g_text_cap) {
         size_t newcap = g_text_cap ? g_text_cap * 2 : 64;
         while (newcap < g_text_len + n + 1) newcap *= 2;
@@ -144,39 +307,107 @@ static void buf_append(const char *s, size_t n) {
         g_text     = p;
         g_text_cap = newcap;
     }
-    memcpy(g_text + g_text_len, s, n);
+    /* +1 to also shift the trailing nul. */
+    memmove(g_text + g_cursor + n,
+            g_text + g_cursor,
+            g_text_len - g_cursor + 1);
+    memcpy(g_text + g_cursor, s, n);
     g_text_len += n;
-    g_text[g_text_len] = '\0';
+    g_cursor   += n;
 }
 
-/* Drop the last UTF-8 codepoint from the buffer (a single Backspace). */
-static void buf_pop_codepoint(void) {
-    if (g_text_len == 0) return;
-    size_t i = g_text_len;
-    /* Walk back over continuation bytes (10xxxxxx), then one more byte
-     * for the start of the sequence. */
-    while (i > 0 && (((unsigned char)g_text[i - 1] & 0xC0) == 0x80))
-        --i;
-    if (i > 0) --i;
-    g_text_len = i;
-    g_text[i]  = '\0';
+/* Delete bytes [start, end) from the buffer; adjust cursor. */
+static void buf_delete_range(size_t start, size_t end) {
+    if (end > g_text_len) end = g_text_len;
+    if (start >= end)     return;
+    /* +1 to also shift the trailing nul. */
+    memmove(g_text + start, g_text + end, g_text_len - end + 1);
+    size_t n = end - start;
+    g_text_len -= n;
+    if (g_cursor >= end)        g_cursor -= n;
+    else if (g_cursor > start)  g_cursor  = start;
 }
 
-/* Drop trailing whitespace then the trailing word (Ctrl+Backspace). */
-static void buf_pop_word(void) {
-    while (g_text_len > 0 &&
-           (g_text[g_text_len - 1] == ' ' || g_text[g_text_len - 1] == '\t'))
-        buf_pop_codepoint();
-    while (g_text_len > 0 &&
-           g_text[g_text_len - 1] != ' '  &&
-           g_text[g_text_len - 1] != '\t' &&
-           g_text[g_text_len - 1] != '\n')
-        buf_pop_codepoint();
+/* --- Kill ring --- */
+
+static void kill_buf_reserve(size_t need) {
+    if (need + 1 <= g_kill_cap) return;
+    size_t newcap = g_kill_cap ? g_kill_cap * 2 : 64;
+    while (newcap < need + 1) newcap *= 2;
+    char *p = realloc(g_kill, newcap);
+    if (!p) die("out of memory");
+    g_kill     = p;
+    g_kill_cap = newcap;
 }
 
-static void buf_clear(void) {
-    g_text_len = 0;
-    if (g_text) g_text[0] = '\0';
+/* Remove [start, end) from g_text and stash the bytes in the kill
+ * ring. `prepend` controls accumulation when this is a consecutive
+ * kill (was_kill = true): forward kills append, backward kills
+ * prepend. The first kill in a run always replaces the ring. */
+static void kill_range(size_t start, size_t end, bool prepend, bool was_kill) {
+    if (end > g_text_len) end = g_text_len;
+    if (start >= end) return;
+    size_t n = end - start;
+
+    if (was_kill) {
+        kill_buf_reserve(g_kill_len + n);
+        if (prepend) {
+            memmove(g_kill + n, g_kill, g_kill_len);
+            memcpy(g_kill, g_text + start, n);
+        } else {
+            memcpy(g_kill + g_kill_len, g_text + start, n);
+        }
+        g_kill_len += n;
+    } else {
+        kill_buf_reserve(n);
+        memcpy(g_kill, g_text + start, n);
+        g_kill_len = n;
+    }
+    g_kill[g_kill_len] = '\0';
+    g_last_was_kill    = true;
+
+    buf_delete_range(start, end);
+}
+
+static void yank(void) {
+    if (g_kill_len > 0) buf_insert(g_kill, g_kill_len);
+}
+
+/* --- Transpose ---
+ *
+ * If the cursor is in the middle of the buffer, swap the codepoint
+ * before the cursor with the codepoint at the cursor and move the
+ * cursor past the pair (matches GNU readline `transpose-chars`). At
+ * end-of-buffer with at least two codepoints, swap the last two and
+ * leave the cursor at the end. */
+static void transpose_chars(void) {
+    if (g_cursor == 0 || g_text_len < 2) return;
+
+    size_t a_start, a_end, b_start, b_end;
+    if (g_cursor < g_text_len) {
+        a_start = prev_codepoint(g_cursor);
+        a_end   = g_cursor;
+        b_start = g_cursor;
+        b_end   = next_codepoint(g_cursor);
+    } else {
+        b_start = prev_codepoint(g_cursor);
+        b_end   = g_cursor;
+        if (b_start == 0) return;
+        a_start = prev_codepoint(b_start);
+        a_end   = b_start;
+    }
+
+    size_t alen = a_end - a_start;
+    size_t blen = b_end - b_start;
+    /* Largest UTF-8 codepoint is 4 bytes, so 8 is comfortable. */
+    char tmp[8];
+    if (alen > sizeof(tmp)) return;
+
+    memcpy(tmp, g_text + a_start, alen);
+    memmove(g_text + a_start, g_text + b_start, blen);
+    memcpy(g_text + a_start + blen, tmp, alen);
+
+    if (g_cursor < g_text_len) g_cursor = b_end;
 }
 
 /* ---------- 5. Font / text rendering ---------- */
@@ -412,20 +643,25 @@ static void apply_rounded_corners(uint32_t *pixels, int w, int h, int radius) {
     }
 }
 
-/* Walk g_text once to count lines and find the widest line in pixels. */
+/* Walk g_text once to count lines and find the widest line in pixels.
+ * Line 0 includes g_prompt_w as a left-side prefix (the prompt is
+ * drawn before the first character of typed text). */
 static void measure_text(int *out_max_line_w, int *out_n_lines) {
     int    n_lines    = 1;
     int    max_line_w = 0;
     size_t line_start = 0;
+    int    line_idx   = 0;
     for (size_t i = 0; i <= g_text_len; ++i) {
         bool is_eol = (i == g_text_len) || (g_text[i] == '\n');
         if (!is_eol) continue;
 
         int lw = text_width_n(g_text + line_start, i - line_start);
+        if (line_idx == 0) lw += g_prompt_w;
         if (lw > max_line_w) max_line_w = lw;
 
         if (i < g_text_len) {
             ++n_lines;
+            ++line_idx;
             line_start = i + 1;
         }
     }
@@ -459,32 +695,52 @@ static void render_frame(uint32_t *pixels, int w, int h) {
     int row_h = g_line_height + ROW_GAP;
     int y     = PADDING_Y + g_ascent;
 
+    /* Draw the optional prompt at the start of row 0 in COLOR_PROMPT
+     * before the buffer text. The cursor / typed text on row 0 will
+     * be offset by g_prompt_w to make room. */
+    if (g_prompt_len > 0) {
+        draw_text_n(pixels, w, h,
+                    PADDING_X, y,
+                    g_prompt, g_prompt_len,
+                    COLOR_PROMPT);
+    }
+
     /* Walk the buffer and draw one segment per '\n'-delimited line.
-     * Track the right edge of the *last* segment we drew so we know
-     * where to plant the cursor. */
+     * On the line that contains g_cursor, measure the width of the
+     * prefix from line_start to g_cursor to decide where to plant
+     * the cursor bar. Line 0 starts after the prompt; later lines
+     * start flush at PADDING_X. */
     size_t line_start = 0;
-    int    cursor_x   = PADDING_X;
+    int    line_idx   = 0;
+    int    cursor_x   = PADDING_X + g_prompt_w;
     int    cursor_y   = y - g_ascent;
 
     for (size_t i = 0; i <= g_text_len; ++i) {
         bool is_eol = (i == g_text_len) || (g_text[i] == '\n');
         if (!is_eol) continue;
 
-        int adv = draw_text_n(pixels, w, h,
-                              PADDING_X, y,
-                              g_text + line_start, i - line_start,
-                              COLOR_FG);
+        int x_offset = (line_idx == 0) ? g_prompt_w : 0;
 
-        cursor_x = PADDING_X + adv;
-        cursor_y = y - g_ascent;
+        draw_text_n(pixels, w, h,
+                    PADDING_X + x_offset, y,
+                    g_text + line_start, i - line_start,
+                    COLOR_FG);
+
+        if (g_cursor >= line_start && g_cursor <= i) {
+            int prefix_w = text_width_n(g_text + line_start,
+                                        g_cursor - line_start);
+            cursor_x = PADDING_X + x_offset + prefix_w;
+            cursor_y = y - g_ascent;
+        }
 
         if (i < g_text_len) {
+            ++line_idx;
             line_start = i + 1;
             y += row_h;
         }
     }
 
-    /* Solid vertical bar cursor at the end of the last line. */
+    /* Solid vertical bar cursor at g_cursor's position. */
     for (int j = 0; j < g_line_height; ++j) {
         int py = cursor_y + j;
         if (py < 0 || py >= h) continue;
@@ -608,35 +864,42 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
     if (!g_xkb_state || !g_xkb_keymap) return;
 
+    /* Capture and reset the kill flag at the start of each command;
+     * each kill_*() helper re-asserts it, so two consecutive kill
+     * commands (e.g. Ctrl+K Ctrl+K) accumulate their text into a
+     * single kill-ring entry. */
+    bool was_kill   = g_last_was_kill;
+    g_last_was_kill = false;
+
     /* Wayland reports evdev keycodes; xkb expects evdev + 8. */
     xkb_keycode_t keycode = key + 8;
 
-    /* Unlike wlnch we honour the user's *current* layout: this is a
-     * text input prompt, so Cyrillic / Greek / Dvorak should produce
-     * the corresponding glyphs. */
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(g_xkb_state, keycode);
+    /* Honour the user's current layout (this is a text-input prompt,
+     * so Cyrillic / Greek / Dvorak should produce native glyphs). */
+    xkb_keysym_t sym       = xkb_state_key_get_one_sym(g_xkb_state, keycode);
+    xkb_keysym_t sym_lower = xkb_keysym_to_lower(sym);
 
-    int ctrl_active = xkb_state_mod_name_is_active(
+    bool ctrl  = xkb_state_mod_name_is_active(
         g_xkb_state, XKB_MOD_NAME_CTRL,  XKB_STATE_MODS_EFFECTIVE) > 0;
-    int shift_active = xkb_state_mod_name_is_active(
+    bool shift = xkb_state_mod_name_is_active(
         g_xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
-    int alt_active = xkb_state_mod_name_is_active(
+    bool alt   = xkb_state_mod_name_is_active(
         g_xkb_state, XKB_MOD_NAME_ALT,   XKB_STATE_MODS_EFFECTIVE) > 0;
-    int super_active = xkb_state_mod_name_is_active(
+    bool super = xkb_state_mod_name_is_active(
         g_xkb_state, XKB_MOD_NAME_LOGO,  XKB_STATE_MODS_EFFECTIVE) > 0;
 
-    /* Cancel without emitting anything. */
+    /* ---------- Submission / cancel (highest priority) ---------- */
+
     if (sym == XKB_KEY_Escape ||
-        (ctrl_active && (sym == XKB_KEY_g || sym == XKB_KEY_G))) {
+        (ctrl && sym_lower == XKB_KEY_g)) {
         g_committed = 0;
         g_running   = 0;
         return;
     }
 
-    /* Enter without Shift commits; Shift+Enter inserts a newline. */
     if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
-        if (shift_active) {
-            buf_append("\n", 1);
+        if (shift) {
+            buf_insert("\n", 1);
             schedule_redraw();
         } else {
             g_committed = 1;
@@ -645,42 +908,135 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
         return;
     }
 
-    /* Backspace: delete previous codepoint (or word with Ctrl). */
+    /* ---------- Cursor movement (named keys) ---------- */
+
+    if (sym == XKB_KEY_Left) {
+        g_cursor = ctrl ? word_back(g_cursor) : prev_codepoint(g_cursor);
+        schedule_redraw();
+        return;
+    }
+    if (sym == XKB_KEY_Right) {
+        g_cursor = ctrl ? word_forward(g_cursor) : next_codepoint(g_cursor);
+        schedule_redraw();
+        return;
+    }
+    if (sym == XKB_KEY_Up)   { cursor_up();   schedule_redraw(); return; }
+    if (sym == XKB_KEY_Down) { cursor_down(); schedule_redraw(); return; }
+    if (sym == XKB_KEY_Home) { g_cursor = line_start_at(g_cursor);
+                               schedule_redraw(); return; }
+    if (sym == XKB_KEY_End)  { g_cursor = line_end_at(g_cursor);
+                               schedule_redraw(); return; }
+
+    /* ---------- Editing (named keys) ---------- */
+
     if (sym == XKB_KEY_BackSpace) {
-        if (ctrl_active) buf_pop_word();
-        else             buf_pop_codepoint();
+        if (ctrl) {
+            kill_range(word_back(g_cursor), g_cursor,
+                       /*prepend=*/true, was_kill);
+        } else {
+            buf_delete_range(prev_codepoint(g_cursor), g_cursor);
+        }
+        schedule_redraw();
+        return;
+    }
+    if (sym == XKB_KEY_Delete) {
+        buf_delete_range(g_cursor, next_codepoint(g_cursor));
         schedule_redraw();
         return;
     }
 
-    /* Ctrl+U clears the buffer (readline-style "kill line"). */
-    if (ctrl_active && !shift_active && !alt_active && !super_active &&
-        (sym == XKB_KEY_u || sym == XKB_KEY_U)) {
-        buf_clear();
-        schedule_redraw();
+    /* ---------- Ctrl+letter chords (no Alt / Super) ---------- */
+
+    if (ctrl && !alt && !super) {
+        switch (sym_lower) {
+        case XKB_KEY_b:
+            g_cursor = prev_codepoint(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_f:
+            g_cursor = next_codepoint(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_a:
+            g_cursor = line_start_at(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_e:
+            g_cursor = line_end_at(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_h: /* alias for Backspace */
+            buf_delete_range(prev_codepoint(g_cursor), g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_d: /* alias for Delete */
+            buf_delete_range(g_cursor, next_codepoint(g_cursor));
+            schedule_redraw(); return;
+        case XKB_KEY_w:
+            kill_range(word_back(g_cursor), g_cursor,
+                       /*prepend=*/true, was_kill);
+            schedule_redraw(); return;
+        case XKB_KEY_k: {
+            /* Kill to end of line. If already at EOL and a '\n'
+             * follows, eat that too (matches readline semantics). */
+            size_t e = line_end_at(g_cursor);
+            if (e == g_cursor && e < g_text_len) e = g_cursor + 1;
+            kill_range(g_cursor, e, /*prepend=*/false, was_kill);
+            schedule_redraw(); return;
+        }
+        case XKB_KEY_u:
+            kill_range(line_start_at(g_cursor), g_cursor,
+                       /*prepend=*/true, was_kill);
+            schedule_redraw(); return;
+        case XKB_KEY_y:
+            yank();
+            schedule_redraw(); return;
+        case XKB_KEY_t:
+            transpose_chars();
+            schedule_redraw(); return;
+        }
+        /* Any other Ctrl+key is silently ignored; we don't want
+         * Ctrl combos to leak into the text buffer. */
         return;
     }
 
-    /* Ignore anything else with Ctrl / Alt / Super held; we don't want
-     * Ctrl+letter or Alt+letter to leak as text into the buffer. */
-    if (ctrl_active || alt_active || super_active) return;
+    /* ---------- Alt+letter chords (no Ctrl / Super) ---------- */
 
-    /* Otherwise insert the UTF-8 the keypress would produce, taking
-     * Shift / CapsLock / dead keys / etc. into account. */
+    if (alt && !ctrl && !super) {
+        switch (sym_lower) {
+        case XKB_KEY_b:
+            g_cursor = word_back(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_f:
+            g_cursor = word_forward(g_cursor);
+            schedule_redraw(); return;
+        case XKB_KEY_d:
+            kill_range(g_cursor, word_forward(g_cursor),
+                       /*prepend=*/false, was_kill);
+            schedule_redraw(); return;
+        case XKB_KEY_BackSpace:
+            kill_range(word_back(g_cursor), g_cursor,
+                       /*prepend=*/true, was_kill);
+            schedule_redraw(); return;
+        }
+        return;
+    }
+
+    /* Drop everything else with a non-shift modifier held; we don't
+     * want stray modifier combos to insert text. */
+    if (ctrl || alt || super) return;
+
+    /* ---------- Plain text insertion ---------- */
+
     char utf8[16];
     int n = xkb_state_key_get_utf8(g_xkb_state, keycode,
                                    utf8, sizeof(utf8));
     if (n <= 0) return;
 
     /* Filter ASCII control characters (other than '\t'). Newlines are
-     * handled above via the Enter keysym path. */
+     * routed through the Return path above. */
     if (n == 1) {
         unsigned char c = (unsigned char)utf8[0];
         if (c < 0x20 && c != '\t') return;
         if (c == 0x7F) return;
     }
 
-    buf_append(utf8, (size_t)n);
+    buf_insert(utf8, (size_t)n);
     schedule_redraw();
 }
 
@@ -768,23 +1124,31 @@ static const struct wl_registry_listener registry_listener = {
 
 static void usage(void) {
     fputs(
-        "usage: wnpt [-f FONT]\n"
-        "  Reads typed text from a Wayland overlay window. On Enter,\n"
-        "  prints the buffered text to stdout and exits 0. On Esc or\n"
-        "  Ctrl-G, exits 1 without printing anything.\n"
-        "  Shift+Enter inserts a newline. Backspace deletes the last\n"
-        "  codepoint; Ctrl+Backspace deletes the last word; Ctrl+U\n"
-        "  clears the buffer.\n"
+        "usage: wnpt [-f FONT] [-p PROMPT]\n"
+        "  Reads typed text from a Wayland overlay window with readline-\n"
+        "  style line editing. On Enter, prints the buffered text to\n"
+        "  stdout and exits 0; on Esc or Ctrl-G, exits 1 without\n"
+        "  printing anything. Shift+Enter inserts a newline.\n"
         "\n"
-        "  -f FONT   fontconfig pattern (env: WNPT_FONT, then WLNCH_FONT)\n",
+        "  Movement : Ctrl+B/F (char), Alt+B/F or Ctrl+Left/Right (word),\n"
+        "             Ctrl+A/E or Home/End (line), Up/Down (multi-line).\n"
+        "  Editing  : Backspace / Ctrl+H, Delete / Ctrl+D,\n"
+        "             Ctrl+W / Ctrl+Backspace / Alt+Backspace (kill word back),\n"
+        "             Alt+D (kill word forward), Ctrl+K (kill to EOL),\n"
+        "             Ctrl+U (kill to BOL), Ctrl+Y (yank), Ctrl+T (transpose).\n"
+        "\n"
+        "  -f FONT     fontconfig pattern (env: WNPT_FONT, then WLNCH_FONT)\n"
+        "  -p PROMPT   single-line text to display before the input area;\n"
+        "              shown in COLOR_PROMPT, never written to stdout\n",
         stderr);
 }
 
 int main(int argc, char **argv) {
     int opt;
-    while ((opt = getopt(argc, argv, "f:h")) != -1) {
+    while ((opt = getopt(argc, argv, "f:p:h")) != -1) {
         switch (opt) {
         case 'f': g_font_pattern = optarg; break;
+        case 'p': g_prompt       = optarg; break;
         case 'h': usage(); return 0;
         default:  usage(); return 2;
         }
@@ -800,7 +1164,21 @@ int main(int argc, char **argv) {
         g_font_pattern = (env && *env) ? env : DEFAULT_FONT;
     }
 
+    /* Reject multi-line prompts: the rendering model assumes the
+     * prompt is a single-line prefix to row 0. Embedded newlines
+     * would either get rendered as zero-advance glyphs (ugly) or
+     * require a more involved layout pass; bail clearly instead. */
+    if (g_prompt) {
+        if (strchr(g_prompt, '\n') || strchr(g_prompt, '\r'))
+            die("-p PROMPT must not contain newline characters");
+        g_prompt_len = strlen(g_prompt);
+    }
+
     font_init(g_font_pattern);
+
+    /* Cache the prompt's pixel width once font metrics are available. */
+    if (g_prompt_len > 0)
+        g_prompt_w = text_width_n(g_prompt, g_prompt_len);
 
     /* Initial window size: empty buffer, one line tall, min width. */
     compute_window_size(&g_win_w, &g_win_h);
@@ -876,6 +1254,7 @@ int main(int argc, char **argv) {
     font_cleanup();
 
     free(g_text);
+    free(g_kill);
 
     /* Exit code mirrors commit/cancel: 0 if the user pressed Enter,
      * 1 otherwise (Esc / Ctrl-G / surface-closed). */

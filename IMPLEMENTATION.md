@@ -567,31 +567,119 @@ listeners. This section covers only the parts that genuinely differ.
 
 ### Mode and key dispatch
 
-`wnpt` is a text-input prompt, so:
+`wnpt` is a text-input prompt with readline-style editing:
 
 - The keysym is resolved via `xkb_state_key_get_one_sym` (honoring the
   current layout group), not via the layout-0 trick `wlnch` uses for
   layout-independent bindings. Cyrillic / Greek / Dvorak users get their
   native script when typing into the prompt.
-- For "regular" keys, the inserted text comes from
+- For plain text keys, the inserted bytes come from
   `xkb_state_key_get_utf8`, which already handles Shift, CapsLock, dead
   keys, and so on. ASCII control characters in the result (other than
   `\t`) are filtered before insertion.
-- Special keys are intercepted before the UTF-8 path:
-  - `XKB_KEY_Return` / `XKB_KEY_KP_Enter` without Shift sets
-    `g_committed = 1` and exits the loop;
-  - the same keysym with Shift appends a literal `\n` to the buffer;
-  - `XKB_KEY_BackSpace` deletes the trailing UTF-8 codepoint (or trailing
-    word with Ctrl);
-  - `Ctrl+U` clears the buffer;
-  - `Esc` and `Ctrl-G` exit without committing.
+- Special keys and modifier chords are dispatched before the UTF-8
+  path. Modifier comparisons normalize Shift on letters via
+  `xkb_keysym_to_lower`, so e.g. `Ctrl+Shift+K` and `Ctrl+K` trigger
+  the same kill-to-EOL command. Bindings:
+
+| Key                                              | Action                          |
+| ------------------------------------------------ | ------------------------------- |
+| `Enter`                                          | commit & exit 0                 |
+| `Shift+Enter`                                    | insert literal `\n`             |
+| `Esc`, `Ctrl+G`                                  | abort & exit 1                  |
+| `Ctrl+B` / `Left`                                | char back                       |
+| `Ctrl+F` / `Right`                               | char forward                    |
+| `Alt+B` / `Ctrl+Left`                            | word back                       |
+| `Alt+F` / `Ctrl+Right`                           | word forward                    |
+| `Ctrl+A` / `Home`                                | beginning of line               |
+| `Ctrl+E` / `End`                                 | end of line                     |
+| `Up`, `Down`                                     | adjacent line, same column      |
+| `Backspace`, `Ctrl+H`                            | delete previous char            |
+| `Delete`, `Ctrl+D`                               | delete next char                |
+| `Ctrl+W`, `Ctrl+Backspace`, `Alt+Backspace`      | kill previous word              |
+| `Alt+D`                                          | kill next word                  |
+| `Ctrl+K`                                         | kill to end of line             |
+| `Ctrl+U`                                         | kill to start of line           |
+| `Ctrl+Y`                                         | yank (paste) kill ring          |
+| `Ctrl+T`                                         | transpose chars around cursor   |
 
 ### Text buffer
 
 A single growable `char *g_text` (doubling capacity, always
-nul-terminated). `buf_pop_codepoint` walks back over UTF-8 continuation
-bytes (`10xxxxxx`) and then one start byte, so a multi-byte glyph is
-removed as a unit.
+nul-terminated). The cursor `g_cursor` is a byte offset in
+`[0, g_text_len]`. All editing primitives operate relative to it:
+
+- `buf_insert(s, n)` shifts `g_text[g_cursor..]` right by `n` bytes
+  (memmove including the trailing nul), copies the new bytes into
+  the gap, and advances `g_cursor` by `n`.
+- `buf_delete_range(start, end)` shifts `g_text[end..]` left into
+  `start` (again with the trailing nul) and adjusts the cursor:
+  positions inside the killed range collapse to `start`, positions
+  past it slide left by `end − start`.
+- `prev_codepoint(pos)` / `next_codepoint(pos)` step one UTF-8
+  codepoint by walking continuation bytes (`10xxxxxx`), so all
+  edit and movement primitives stay glyph-aligned.
+- `line_start_at(pos)` / `line_end_at(pos)` find the surrounding
+  `\n` boundaries (or buffer edges).
+- Word boundaries (`word_back`, `word_forward`) are byte-level scans
+  using `is_word_byte` (`[A-Za-z0-9_]` plus all bytes ≥ 0x80, so
+  multi-byte UTF-8 is treated as one big "word"). This is much less
+  sophisticated than locale-aware Unicode word breaks, but it
+  matches what readline does on a typical Linux terminal.
+
+### Vertical motion
+
+`cursor_up` and `cursor_down` track "column" as a codepoint count
+from the start of the current line, then advance that many codepoints
+on the previous / next line (clamped to the destination line's
+length). Codepoint-counting works well for the default monospace
+font; for proportional fonts it's an approximation, which is fine
+for a one-shot prompt.
+
+### Kill ring
+
+A single growable `g_kill` slot, plus a `g_last_was_kill` flag set
+by every `kill_*()` helper and reset at the top of `keyboard_key`.
+Consecutive kill commands accumulate:
+
+- forward kills (`Ctrl+K`, `Alt+D`) **append** to the ring;
+- backward kills (`Ctrl+W`, `Ctrl+U`, `Ctrl+Backspace`,
+  `Alt+Backspace`) **prepend** to the ring;
+- the first kill in any run replaces the ring outright.
+
+`Ctrl+Y` (`yank`) inserts the entire ring at point. There's no
+multi-entry rotation (no `Alt+Y`); the ring holds exactly one entry.
+
+### Transpose
+
+`Ctrl+T` (`transpose_chars`) swaps the codepoint before the cursor
+with the one at the cursor and advances the cursor past the pair.
+At end-of-buffer with at least two codepoints, it swaps the last
+two and leaves the cursor at the end. This matches GNU readline's
+`transpose-chars`.
+
+### Optional prompt (`-p PROMPT`)
+
+`wnpt -p "Note: "` paints a label at the start of the first row in
+`COLOR_PROMPT` (themable via `config.h`, defaults to `COLOR_KEY` so
+it visually matches wlnch's accent). The prompt is purely visual:
+it never enters `g_text` and is never emitted on commit; only typed
+text reaches stdout.
+
+Implementation:
+
+- The string is stored in `g_prompt` (borrowed pointer into `argv`),
+  with `g_prompt_len` and `g_prompt_w` (pixel width) cached after
+  `font_init`.
+- `measure_text` adds `g_prompt_w` to the measured width of line 0
+  only, so the window grows wide enough to fit the label plus the
+  first line of input.
+- `render_frame` draws the prompt at `(PADDING_X, baseline_y)`
+  before walking the buffer, then offsets line 0's text and cursor
+  by `g_prompt_w`. Lines after the first start at `PADDING_X`
+  flush left, as before.
+- Multi-line prompts (`'\n'` or `'\r'` in the argument) are rejected
+  in `main` rather than rendered with broken layout.
 
 ### Dynamic resize
 

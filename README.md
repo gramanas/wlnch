@@ -101,26 +101,58 @@ repo. It opens an overlay layer-surface that looks like a `wlnch` window
 but renders no preset entries — instead it accepts arbitrary text from
 the keyboard and prints the buffer to stdout on commit.
 
-Keys:
+Editing is readline-style: the cursor lives at an arbitrary position
+inside the buffer (not just the end), and a single-slot kill ring with
+consecutive-kill accumulation supports yank.
+
+Submission:
 
 - typing inserts UTF-8 (your current keyboard layout is honored, including
   Shift / CapsLock / dead keys);
 - `Enter` commits: the buffered text is printed to stdout, exit 0;
 - `Shift+Enter` inserts a newline into the buffer;
-- `Backspace` deletes the previous codepoint, `Ctrl+Backspace` deletes the
-  previous word, `Ctrl+U` clears the buffer;
 - `Esc` or `Ctrl+G` aborts: nothing is printed, exit 1.
+
+Cursor movement:
+
+- `Ctrl+B` / `←` and `Ctrl+F` / `→` — one char back / forward
+- `Alt+B` / `Ctrl+←` and `Alt+F` / `Ctrl+→` — one word back / forward
+- `Ctrl+A` / `Home` and `Ctrl+E` / `End` — beginning / end of line
+- `↑` / `↓` — previous / next line, column preserved (codepoint-counted)
+
+Editing:
+
+- `Backspace` / `Ctrl+H` — delete previous char
+- `Delete` / `Ctrl+D` — delete next char
+- `Ctrl+W` / `Ctrl+Backspace` / `Alt+Backspace` — kill previous word
+- `Alt+D` — kill next word
+- `Ctrl+K` — kill from cursor to end of line
+- `Ctrl+U` — kill from start of line to cursor
+- `Ctrl+Y` — yank (paste) the kill ring at point
+- `Ctrl+T` — transpose the two chars around point
+
+Consecutive kill commands (e.g. `Ctrl+K Ctrl+K` or
+`Ctrl+W Ctrl+W`) accumulate into a single kill-ring entry, so a
+following `Ctrl+Y` restores everything as one paste.
 
 Typical usage:
 
 ```sh
-wnpt > note.txt          # capture a quick note to a file
-echo "hello $(wnpt)"     # interpolate a typed value into a command
+wnpt > note.txt                     # capture a quick note to a file
+echo "hello $(wnpt)"                # interpolate a typed value into a command
+wnpt -p "title: " > new-post.md     # show a labeled prompt before the input
 ```
 
-Visual styling (font, colors, padding, corner radius, cursor) is shared
-with `wlnch` via `config.h`. The font can also be overridden per-run with
-`-f FONT` or via `$WNPT_FONT` (falling back to `$WLNCH_FONT`).
+Visual styling (font, colors, padding, corner radius, cursor, prompt
+color) is shared with `wlnch` via `config.h`. The font can also be
+overridden per-run with `-f FONT` or via `$WNPT_FONT` (falling back to
+`$WLNCH_FONT`).
+
+The `-p PROMPT` flag draws a single-line label in front of the input
+area, rendered in `COLOR_PROMPT` (defaults to the same accent blue
+`wlnch` uses for keys). The prompt is purely visual — it never enters
+the buffer and is never written to stdout. Multi-line prompts are
+rejected with a clear error.
 
 ## Why not GNOME?
 

@@ -114,6 +114,13 @@
  * Default: COLOR_FG. */
 #define CURSOR_COLOR COLOR_FG
 
+/* Color used to render the optional prompt (`wnpt -p PROMPT`)
+ * shown at the start of the first row before the user's input.
+ * Tracking COLOR_KEY by default keeps the visual signature
+ * consistent with wlnch's accent.
+ * Default: COLOR_KEY. */
+#define COLOR_PROMPT COLOR_KEY
+
 /* Width (in pixels) of the cursor bar.
  * Default: 2. */
 #define CURSOR_WIDTH 2
