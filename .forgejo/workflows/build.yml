@@ -38,7 +38,6 @@ jobs:
 
 
       - name: Build
-        working-directory: src
         run: make
 
       - name: Upload artifacts
@@ -46,9 +45,9 @@ jobs:
         with:
           name: binaries
           path: |
-            src/wlnch
-            src/wout
-            src/wnpt
+            wlnch
+            wout
+            wnpt
 
 #      - name: Upload artifacts
 #        working-directory: src
