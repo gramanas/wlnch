@@ -25,7 +25,9 @@ jobs:
 
       - name: Checkout
         run: |
-          git clone --depth=1 "$FORGEJO_SERVER_URL/$FORGEJO_REPOSITORY" src
+          git clone --depth=1 \
+            "https://forgejo-actions:${FORGEJO_TOKEN}@${FORGEJO_SERVER_URL#https://}/$FORGEJO_REPOSITORY" \
+            src
           cd src
           git fetch --depth=1 origin "$FORGEJO_SHA"
           git checkout "$FORGEJO_SHA"
