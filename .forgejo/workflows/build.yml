@@ -39,11 +39,26 @@ jobs:
       - name: Build
         run: make
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+      - name: Prepare release
+        run: |
+          mkdir -p dist/release
+          cp wlnch wout wnpt dist/release/
+
+      - name: Publish release
+        uses: actions/forgejo-release@v2
         with:
-          name: binaries
-          path: wlnch
+          direction: upload
+          url: ${{ env.FORGEJO_SERVER_URL }}
+          release-dir: dist/release
+          release-notes: "Build from ${{ forgejo.sha }}"
+          token: ${{ secrets.FORGEJO_TOKEN }}
+
+
+#      - name: Upload artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: binaries
+#          path: wlnch
 
 #      - name: Upload artifacts
 #        working-directory: src
