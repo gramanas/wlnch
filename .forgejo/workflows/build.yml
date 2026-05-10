@@ -36,12 +36,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-
       - name: Build
         run: make
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: forgejo/upload-artifact@v7
         with:
           name: binaries
           path: |
