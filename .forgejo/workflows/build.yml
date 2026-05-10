@@ -22,7 +22,8 @@ jobs:
             freetype2 \
             fontconfig \
             pkg-config \
-            nodejs
+            nodejs \
+            jq
 
 #      - name: Checkout
 #        run: |
