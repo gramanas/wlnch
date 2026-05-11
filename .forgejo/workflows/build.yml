@@ -53,7 +53,7 @@ jobs:
           for pkg in *.pkg.tar.zst; do
             curl -v -s --fail -X PUT \
               "${FORGEJO_SERVER_URL}/api/packages/${OWNER}/arch/os" \
-              --user "forgejo-actions:${FORGEJO_TOKEN}" \
+              --user "${OWNER}:${{ secrets.PACKAGE_TOKEN }}" \
               --header "Content-Type: application/octet-stream" \
               --data-binary "@${pkg}"
           done
