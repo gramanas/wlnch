@@ -1,7 +1,7 @@
-# Maintainer: you <you@example.com>
+# Maintainer: grm <grm@eyesin.space>
 pkgbase=wl-tools
 pkgname=(wlnch wout wnpt)
-pkgver=0.1.0
+pkgver=dev
 pkgrel=1
 pkgdesc="Wayland tools"
 arch=(x86_64)

@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -41,17 +42,21 @@ jobs:
         run: make
 
       - name: Build pacman packages
+        if: startsWith(forgejo.ref, 'refs/tags/')
         run: |
-          # makepkg refuses to run as root
+          VERSION="${{ forgejo.ref_name }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
           useradd -m builder
           chown -R builder:builder .
           su builder -c "makepkg --noconfirm --nodeps --noprogressbar"
  
       - name: Push to Forgejo arch registry
+        if: startsWith(forgejo.ref, 'refs/tags/')
         run: |
           OWNER="${FORGEJO_REPOSITORY%/*}"
           for pkg in *.pkg.tar.zst; do
-            curl -v -s --fail -X PUT \
+            curl -s --fail -X PUT \
               "${FORGEJO_SERVER_URL}/api/packages/${OWNER}/arch/os" \
               --user "${OWNER}:${{ secrets.PACKAGE_TOKEN }}" \
               --header "Content-Type: application/octet-stream" \
@@ -59,11 +64,13 @@ jobs:
           done
 
       - name: Prepare release
+        if: startsWith(forgejo.ref, 'refs/tags/')
         run: |
           mkdir -p dist/release
           cp wlnch wout wnpt dist/release/
 
       - name: Publish release
+        if: startsWith(forgejo.ref, 'refs/tags/')
         uses: actions/forgejo-release@v2
         with:
           direction: upload
