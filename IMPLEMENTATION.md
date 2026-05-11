@@ -720,6 +720,93 @@ empty committed buffer prints nothing. The process exit code mirrors
 the cancel/commit decision: `0` for Enter, `1` for Esc / Ctrl-G /
 surface-closed.
 
+### Clipboard / primary selection paste
+
+`wnpt` listens to two Wayland selection devices so the user can pull
+text in from elsewhere on the desktop:
+
+- **Ctrl+V** → the *clipboard* (`wl_data_device`, what apps' Ctrl+C
+  writes into).
+- **Shift+Insert** → the *primary selection*
+  (`zwp_primary_selection_device_v1`, what middle-click pastes from).
+
+The two paths are structural mirrors. For each device we keep at
+most one outstanding offer (`g_clipboard_offer` / `g_primary_offer`)
+and a small `paste_offer_state` that accumulates the MIME types the
+source advertises:
+
+```
+   wl_data_device.data_offer(new_offer)         <- compositor
+        +--> calloc(paste_offer_state)
+        +--> set_user_data(new_offer, state)
+        +--> add_listener(new_offer, clip_offer_listener)
+                wl_data_offer.offer("text/plain;charset=utf-8")
+                wl_data_offer.offer("UTF8_STRING")
+                wl_data_offer.offer("text/html")
+                ...
+
+   wl_data_device.selection(new_offer)          <- compositor
+        +--> destroy + free old offer/state
+        +--> g_clipboard_offer       = new_offer
+        +--> g_clipboard_offer_state = state
+```
+
+A `selection` event with a `NULL` offer means the desktop cleared the
+clipboard; the matching paste binding then no-ops until the next
+non-empty `selection` arrives.
+
+We never offer selections of our own — `wnpt` is sink-only — so the
+DnD half of `wl_data_device` is wired up to no-op handlers (libwayland
+aborts if the listener struct has missing function pointers).
+
+The actual paste is the canonical pipe-and-receive dance:
+
+```c
+pipe2(p, O_CLOEXEC);
+wl_data_offer_receive(offer, mime, p[1]);   /* hand write end to source */
+wl_display_flush(g_display);                /* must flush before close  */
+close(p[1]);                                /* so we can see EOF        */
+
+/* poll-loop on p[0] with a 2 s per-chunk lull and a 16 MiB cap;
+   accumulate into a malloc'd buffer */
+text = read_offer(p[0], &len);
+close(p[0]);
+
+paste_insert(text, len);                    /* drop NULs and CRs, then
+                                               buf_insert at the cursor */
+```
+
+Closing our copy of the write end is critical: only then does the
+kernel signal EOF when the source closes its end. The 2-second
+per-chunk timeout (rather than an overall timeout) lets large remote
+clipboards trickle in indefinitely while still capping a stuck source
+to ~2 s of stall before we give up.
+
+MIME preference is the standard text-cascade:
+
+| order | MIME                          | rationale                              |
+|-------|-------------------------------|----------------------------------------|
+| 1     | `text/plain;charset=utf-8`    | unambiguous UTF-8                      |
+| 2     | `UTF8_STRING`                 | X11-era UTF-8 atom; very common        |
+| 3     | `text/plain`                  | common; assumed UTF-8 in practice      |
+| 4     | `STRING` / `TEXT`             | last resort; treated as UTF-8 too      |
+
+`paste_insert` filters `\0` (would break g_text's nul-termination)
+and `\r` (so CRLF clipboards normalise to LF and bare-CR collapses
+away). Everything else, including `\n` and `\t`, passes through —
+so multi-line paste inserts the newlines into the buffer rather than
+committing.
+
+A third roundtrip is added in `main()` after binding the per-seat
+devices, so the initial `data_offer` + `selection` events for
+whatever is already on the desktop's clipboards arrive *before* the
+dispatch loop starts. Without it, an immediate `Ctrl+V` right after
+launch could find `g_clipboard_offer == NULL` even with a perfectly
+good selection on the desktop.
+
+Either manager can be missing on minimal compositors; the matching
+paste binding then no-ops silently rather than aborting the program.
+
 ## wout
 
 `wout` ("Wayland out") is the third sibling, built from

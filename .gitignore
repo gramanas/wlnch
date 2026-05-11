@@ -5,5 +5,7 @@ protocols/wlr-layer-shell-unstable-v1-client-protocol.h
 protocols/wlr-layer-shell-unstable-v1-protocol.o
 protocols/xdg-shell-client-protocol.h
 protocols/xdg-shell-protocol.o
+protocols/primary-selection-unstable-v1-client-protocol.h
+protocols/primary-selection-unstable-v1-protocol.o
 *.o
 *.elc

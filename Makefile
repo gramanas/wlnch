@@ -10,11 +10,13 @@ PROTO_DIR = protocols
 
 PROTO_HEADERS = \
 	$(PROTO_DIR)/wlr-layer-shell-unstable-v1-client-protocol.h \
-	$(PROTO_DIR)/xdg-shell-client-protocol.h
+	$(PROTO_DIR)/xdg-shell-client-protocol.h \
+	$(PROTO_DIR)/primary-selection-unstable-v1-client-protocol.h
 
 PROTO_SOURCES = \
 	$(PROTO_DIR)/wlr-layer-shell-unstable-v1-protocol.c \
-	$(PROTO_DIR)/xdg-shell-protocol.c
+	$(PROTO_DIR)/xdg-shell-protocol.c \
+	$(PROTO_DIR)/primary-selection-unstable-v1-protocol.c
 
 PROTO_OBJS = $(PROTO_SOURCES:.c=.o)
 

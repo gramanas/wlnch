@@ -40,6 +40,18 @@
  *   Ctrl+Y                  yank (paste) the kill ring at point
  *   Ctrl+T                  transpose the two chars around point
  *
+ * Pasting from the system clipboards:
+ *
+ *   Ctrl+V                  paste the Wayland clipboard selection
+ *                           (wl_data_device, what Ctrl+C/Ctrl+V apps
+ *                           write to)
+ *   Shift+Insert            paste the primary selection
+ *                           (zwp_primary_selection_device_v1, what
+ *                           middle-click pastes from)
+ *
+ *   Pasted text is inserted at the cursor; embedded newlines stay
+ *   in the buffer and do *not* commit (Enter is for commit).
+ *
  * Typical usage:
  *
  *   wnpt > note.txt
@@ -51,14 +63,16 @@
  * library. Sections (numbered to mirror wlnch.c):
  *
  *   1. Includes
- *   2. Globals (text buffer, cursor, kill ring, wayland, xkb, font)
+ *   2. Globals (text buffer, cursor, kill ring, wayland, xkb, font,
+ *               clipboards)
  *   3. Utility helpers (UTF-8, OOM)
  *   4. Text buffer + cursor + kill ring
  *   5. Font / text rendering
  *   6. SHM buffer with release tracking
  *   7. Drawing
- *   8. Wayland listeners
- *   9. main()
+ *   8. Clipboard / primary selection paste
+ *   9. Wayland listeners
+ *  10. main()
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -68,6 +82,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -88,6 +103,7 @@
 #include <fontconfig/fontconfig.h>
 
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "primary-selection-unstable-v1-client-protocol.h"
 
 #include "config.h"
 
@@ -130,6 +146,34 @@ static struct wl_keyboard           * g_keyboard;
 static struct zwlr_layer_shell_v1   * g_layer_shell;
 static struct wl_surface            * g_surface;
 static struct zwlr_layer_surface_v1 * g_layer_surface;
+
+/* Clipboard (Ctrl+V) and primary selection (Shift+Insert).
+ *
+ * For each device we keep one outstanding offer at a time: the
+ * `selection` event delivers a fresh wl_data_offer and we destroy
+ * the previous one. Each offer carries a `paste_offer_state` (set
+ * via set_user_data) that accumulates the MIME types the source
+ * advertises, so that on paste we can pick the most preferred text
+ * MIME without re-querying the server.
+ *
+ * Either manager may be missing on minimal compositors; the matching
+ * paste binding then no-ops silently. */
+struct paste_offer_state {
+    bool has_utf8;        /* text/plain;charset=utf-8 (preferred) */
+    bool has_utf8_string; /* UTF8_STRING (X11 legacy)              */
+    bool has_plain;       /* text/plain (assumed UTF-8)            */
+    bool has_string;      /* STRING / TEXT (best-effort UTF-8)     */
+};
+
+static struct wl_data_device_manager                 * g_data_dev_mgr;
+static struct wl_data_device                         * g_data_device;
+static struct wl_data_offer                          * g_clipboard_offer;
+static struct paste_offer_state                      * g_clipboard_offer_state;
+
+static struct zwp_primary_selection_device_manager_v1 * g_primary_mgr;
+static struct zwp_primary_selection_device_v1         * g_primary_device;
+static struct zwp_primary_selection_offer_v1          * g_primary_offer;
+static struct paste_offer_state                       * g_primary_offer_state;
 
 static struct xkb_context           * g_xkb_ctx;
 static struct xkb_keymap            * g_xkb_keymap;
@@ -785,7 +829,280 @@ static void schedule_redraw(void) {
     }
 }
 
-/* ---------- 8. Wayland listeners ---------- */
+/* ---------- 8. Clipboard / primary selection paste ---------- */
+
+/* Translate one MIME advertisement into a flag bit on the offer
+ * state. Anything we don't recognise is ignored — sources commonly
+ * advertise rich types like text/html or image/png that we have no
+ * way to render. */
+static void offer_track_mime(struct paste_offer_state *st, const char *mime) {
+    if (!st || !mime) return;
+    if      (strcmp(mime, "text/plain;charset=utf-8") == 0) st->has_utf8        = true;
+    else if (strcmp(mime, "UTF8_STRING")              == 0) st->has_utf8_string = true;
+    else if (strcmp(mime, "text/plain")               == 0) st->has_plain       = true;
+    else if (strcmp(mime, "STRING")                   == 0 ||
+             strcmp(mime, "TEXT")                     == 0) st->has_string      = true;
+}
+
+/* Most-preferred text MIME the source advertises, or NULL if none. */
+static const char *offer_best_mime(const struct paste_offer_state *st) {
+    if (!st) return NULL;
+    if (st->has_utf8)        return "text/plain;charset=utf-8";
+    if (st->has_utf8_string) return "UTF8_STRING";
+    if (st->has_plain)       return "text/plain";
+    if (st->has_string)      return "STRING";
+    return NULL;
+}
+
+/* --- wl_data_offer listener (clipboard MIME advertisements) --- */
+
+static void clip_offer_offer(void *data, struct wl_data_offer *o,
+                             const char *mime) {
+    (void)o;
+    offer_track_mime((struct paste_offer_state *)data, mime);
+}
+
+static void clip_offer_source_actions(void *data, struct wl_data_offer *o,
+                                      uint32_t actions) {
+    (void)data; (void)o; (void)actions;
+}
+
+static void clip_offer_action(void *data, struct wl_data_offer *o,
+                              uint32_t action) {
+    (void)data; (void)o; (void)action;
+}
+
+static const struct wl_data_offer_listener clip_offer_listener = {
+    .offer          = clip_offer_offer,
+    .source_actions = clip_offer_source_actions,
+    .action         = clip_offer_action,
+};
+
+/* Replace the cached clipboard offer + state, destroying any prior. */
+static void clip_offer_replace(struct wl_data_offer *new_offer) {
+    if (g_clipboard_offer) {
+        wl_data_offer_destroy(g_clipboard_offer);
+        free(g_clipboard_offer_state);
+    }
+    g_clipboard_offer       = new_offer;
+    g_clipboard_offer_state = new_offer ? wl_data_offer_get_user_data(new_offer)
+                                        : NULL;
+}
+
+/* --- wl_data_device listener (clipboard: data_offer + selection) --- */
+
+static void data_dev_data_offer(void *data, struct wl_data_device *d,
+                                struct wl_data_offer *offer) {
+    (void)data; (void)d;
+    /* Allocate a fresh state and wire it to the offer. The matching
+     * `selection` event will follow shortly and either promote this
+     * offer to the active clipboard or replace it with NULL. */
+    struct paste_offer_state *st = calloc(1, sizeof(*st));
+    if (!st) { wl_data_offer_destroy(offer); return; }
+    wl_data_offer_set_user_data(offer, st);
+    wl_data_offer_add_listener(offer, &clip_offer_listener, st);
+}
+
+static void data_dev_selection(void *data, struct wl_data_device *d,
+                               struct wl_data_offer *offer) {
+    (void)data; (void)d;
+    clip_offer_replace(offer);
+}
+
+/* DnD is not used by wnpt — but the listener struct demands handlers
+ * for enter / leave / motion / drop, otherwise libwayland aborts on
+ * the first DnD event. They no-op safely. */
+static void data_dev_enter(void *data, struct wl_data_device *d,
+                           uint32_t serial, struct wl_surface *surface,
+                           wl_fixed_t x, wl_fixed_t y,
+                           struct wl_data_offer *offer) {
+    (void)data; (void)d; (void)serial; (void)surface; (void)x; (void)y;
+    if (offer) wl_data_offer_destroy(offer);
+}
+static void data_dev_leave(void *data, struct wl_data_device *d) {
+    (void)data; (void)d;
+}
+static void data_dev_motion(void *data, struct wl_data_device *d,
+                            uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+    (void)data; (void)d; (void)time; (void)x; (void)y;
+}
+static void data_dev_drop(void *data, struct wl_data_device *d) {
+    (void)data; (void)d;
+}
+
+static const struct wl_data_device_listener data_dev_listener = {
+    .data_offer = data_dev_data_offer,
+    .enter      = data_dev_enter,
+    .leave      = data_dev_leave,
+    .motion     = data_dev_motion,
+    .drop       = data_dev_drop,
+    .selection  = data_dev_selection,
+};
+
+/* --- primary selection: same shape as above --- */
+
+static void primary_offer_offer(void *data,
+                                struct zwp_primary_selection_offer_v1 *o,
+                                const char *mime) {
+    (void)o;
+    offer_track_mime((struct paste_offer_state *)data, mime);
+}
+
+static const struct zwp_primary_selection_offer_v1_listener primary_offer_listener = {
+    .offer = primary_offer_offer,
+};
+
+static void primary_offer_replace(struct zwp_primary_selection_offer_v1 *new_offer) {
+    if (g_primary_offer) {
+        zwp_primary_selection_offer_v1_destroy(g_primary_offer);
+        free(g_primary_offer_state);
+    }
+    g_primary_offer       = new_offer;
+    g_primary_offer_state = new_offer
+        ? zwp_primary_selection_offer_v1_get_user_data(new_offer)
+        : NULL;
+}
+
+static void primary_dev_data_offer(void *data,
+                                   struct zwp_primary_selection_device_v1 *d,
+                                   struct zwp_primary_selection_offer_v1 *offer) {
+    (void)data; (void)d;
+    struct paste_offer_state *st = calloc(1, sizeof(*st));
+    if (!st) { zwp_primary_selection_offer_v1_destroy(offer); return; }
+    zwp_primary_selection_offer_v1_set_user_data(offer, st);
+    zwp_primary_selection_offer_v1_add_listener(offer, &primary_offer_listener, st);
+}
+
+static void primary_dev_selection(void *data,
+                                  struct zwp_primary_selection_device_v1 *d,
+                                  struct zwp_primary_selection_offer_v1 *offer) {
+    (void)data; (void)d;
+    primary_offer_replace(offer);
+}
+
+static const struct zwp_primary_selection_device_v1_listener primary_dev_listener = {
+    .data_offer = primary_dev_data_offer,
+    .selection  = primary_dev_selection,
+};
+
+/* --- Reading and inserting pasted bytes --- */
+
+/* Read everything from `fd` until EOF or a poll lull. We size the
+ * timeout per chunk rather than overall: a fast source closes
+ * within a few ms so the loop exits on EOF; a slow one (e.g. a
+ * large remote clipboard) keeps trickling bytes and each chunk
+ * resets the 2 s budget. A misbehaving source stalls at most
+ * 2 s before we give up.
+ *
+ * Caller owns the returned buffer (free()). Returns NULL on alloc
+ * failure or fatal poll/read errors. The fd is left open. */
+static char *read_offer(int fd, size_t *out_len) {
+    enum { POLL_TIMEOUT_MS = 2000, MAX_BYTES = 16 * 1024 * 1024 };
+    size_t cap = 4096, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+
+    for (;;) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int n = poll(&pfd, 1, POLL_TIMEOUT_MS);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(buf); return NULL;
+        }
+        if (n == 0) break; /* lull -> treat as done */
+        if (!(pfd.revents & POLLIN)) break;
+
+        if (len + 4096 > cap) {
+            if (cap >= MAX_BYTES) break;
+            size_t newcap = cap * 2;
+            if (newcap > MAX_BYTES) newcap = MAX_BYTES;
+            char *nb = realloc(buf, newcap);
+            if (!nb) { free(buf); return NULL; }
+            buf = nb;
+            cap = newcap;
+        }
+
+        ssize_t r = read(fd, buf + len, cap - len);
+        if (r < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            free(buf); return NULL;
+        }
+        if (r == 0) break; /* EOF: source closed its write end */
+        len += (size_t)r;
+        if (len >= MAX_BYTES) break;
+    }
+
+    *out_len = len;
+    return buf;
+}
+
+/* Insert pasted bytes at the cursor with light sanitisation:
+ *   - NUL bytes dropped (would break g_text's nul-termination);
+ *   - CR ('\r') dropped, normalising CRLF -> LF and bare CR -> "";
+ *   - everything else (incl. '\t' and '\n') is inserted verbatim.
+ * Pasted newlines stay in the buffer; they do NOT commit (unlike
+ * the Enter key, which is reserved for explicit submission). */
+static void paste_insert(const char *src, size_t n) {
+    if (!src || n == 0) return;
+    char *clean = malloc(n);
+    if (!clean) return;
+    size_t k = 0;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '\0' || c == '\r') continue;
+        clean[k++] = (char)c;
+    }
+    if (k > 0) buf_insert(clean, k);
+    free(clean);
+}
+
+/* Common pipe + flush + slurp + insert, parameterised over the two
+ * different `receive` requests. We pipe2(O_CLOEXEC) so the fd never
+ * leaks anywhere; only the source app gets it (the compositor
+ * forwards the write end via SCM_RIGHTS). */
+static void paste_from_clipboard(void) {
+    if (!g_clipboard_offer) return;
+    const char *mime = offer_best_mime(g_clipboard_offer_state);
+    if (!mime) return;
+
+    int p[2];
+    if (pipe2(p, O_CLOEXEC) < 0) return;
+
+    wl_data_offer_receive(g_clipboard_offer, mime, p[1]);
+    if (wl_display_flush(g_display) < 0) { close(p[0]); close(p[1]); return; }
+    close(p[1]);
+
+    size_t len = 0;
+    char *text = read_offer(p[0], &len);
+    close(p[0]);
+    if (text) {
+        paste_insert(text, len);
+        free(text);
+    }
+}
+
+static void paste_from_primary(void) {
+    if (!g_primary_offer) return;
+    const char *mime = offer_best_mime(g_primary_offer_state);
+    if (!mime) return;
+
+    int p[2];
+    if (pipe2(p, O_CLOEXEC) < 0) return;
+
+    zwp_primary_selection_offer_v1_receive(g_primary_offer, mime, p[1]);
+    if (wl_display_flush(g_display) < 0) { close(p[0]); close(p[1]); return; }
+    close(p[1]);
+
+    size_t len = 0;
+    char *text = read_offer(p[0], &len);
+    close(p[0]);
+    if (text) {
+        paste_insert(text, len);
+        free(text);
+    }
+}
+
+/* ---------- 9. Wayland listeners ---------- */
 
 /* --- layer surface --- */
 
@@ -927,6 +1244,18 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
     if (sym == XKB_KEY_End)  { g_cursor = line_end_at(g_cursor);
                                schedule_redraw(); return; }
 
+    /* Shift+Insert pastes the primary selection (mouse-highlight
+     * buffer). Plain Insert and other modifier combos are ignored
+     * — we don't model overwrite mode, and Ctrl+Insert (a copy
+     * alias on some desktops) has nothing to copy from wnpt. */
+    if (sym == XKB_KEY_Insert) {
+        if (shift && !ctrl && !alt && !super) {
+            paste_from_primary();
+            schedule_redraw();
+        }
+        return;
+    }
+
     /* ---------- Editing (named keys) ---------- */
 
     if (sym == XKB_KEY_BackSpace) {
@@ -988,6 +1317,12 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
             schedule_redraw(); return;
         case XKB_KEY_t:
             transpose_chars();
+            schedule_redraw(); return;
+        case XKB_KEY_v:
+            /* Ctrl+V pastes the Wayland clipboard selection
+             * (the wl_data_device one — what other apps' Ctrl+C
+             * writes into). */
+            paste_from_clipboard();
             schedule_redraw(); return;
         }
         /* Any other Ctrl+key is silently ignored; we don't want
@@ -1107,6 +1442,14 @@ static void registry_global(void *data, struct wl_registry *r, uint32_t name,
         uint32_t v = version > 4 ? 4 : version;
         g_layer_shell = wl_registry_bind(
             r, name, &zwlr_layer_shell_v1_interface, v);
+    } else if (strcmp(iface, wl_data_device_manager_interface.name) == 0) {
+        uint32_t v = version > 3 ? 3 : version;
+        g_data_dev_mgr = wl_registry_bind(
+            r, name, &wl_data_device_manager_interface, v);
+    } else if (strcmp(iface,
+               zwp_primary_selection_device_manager_v1_interface.name) == 0) {
+        g_primary_mgr = wl_registry_bind(
+            r, name, &zwp_primary_selection_device_manager_v1_interface, 1);
     }
 }
 
@@ -1120,7 +1463,7 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-/* ---------- 9. main ---------- */
+/* ---------- 10. main ---------- */
 
 static void usage(void) {
     fputs(
@@ -1136,6 +1479,7 @@ static void usage(void) {
         "             Ctrl+W / Ctrl+Backspace / Alt+Backspace (kill word back),\n"
         "             Alt+D (kill word forward), Ctrl+K (kill to EOL),\n"
         "             Ctrl+U (kill to BOL), Ctrl+Y (yank), Ctrl+T (transpose).\n"
+        "  Pasting  : Ctrl+V (clipboard), Shift+Insert (primary selection).\n"
         "\n"
         "  -f FONT     fontconfig pattern (env: WNPT_FONT, then WLNCH_FONT)\n"
         "  -p PROMPT   single-line text to display before the input area;\n"
@@ -1204,6 +1548,29 @@ int main(int argc, char **argv) {
     /* Second roundtrip so seat capability events arrive. */
     wl_display_roundtrip(g_display);
 
+    /* Bind the per-seat clipboard / primary-selection devices.
+     * Either manager being absent is non-fatal: the matching paste
+     * binding (Ctrl+V / Shift+Insert) just becomes a no-op. */
+    if (g_data_dev_mgr && g_seat) {
+        g_data_device = wl_data_device_manager_get_data_device(
+            g_data_dev_mgr, g_seat);
+        wl_data_device_add_listener(g_data_device, &data_dev_listener, NULL);
+    }
+    if (g_primary_mgr && g_seat) {
+        g_primary_device = zwp_primary_selection_device_manager_v1_get_device(
+            g_primary_mgr, g_seat);
+        zwp_primary_selection_device_v1_add_listener(
+            g_primary_device, &primary_dev_listener, NULL);
+    }
+
+    /* Third roundtrip so the initial `data_offer` + `selection`
+     * events for whatever is already on the clipboards arrive
+     * before we enter the dispatch loop. Without this, an immediate
+     * Ctrl+V right after launch might find g_clipboard_offer still
+     * NULL even though the desktop has a perfectly good selection. */
+    if (g_data_device || g_primary_device)
+        wl_display_roundtrip(g_display);
+
     g_surface = wl_compositor_create_surface(g_compositor);
     g_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         g_layer_shell, g_surface, NULL,
@@ -1237,6 +1604,16 @@ int main(int argc, char **argv) {
     if (g_layer_surface) zwlr_layer_surface_v1_destroy(g_layer_surface);
     if (g_surface)       wl_surface_destroy(g_surface);
     if (g_keyboard)      wl_keyboard_release(g_keyboard);
+
+    /* Drop any cached selection offers and the per-seat devices
+     * before tearing down the seat / managers / compositor. */
+    clip_offer_replace(NULL);
+    primary_offer_replace(NULL);
+    if (g_data_device)   wl_data_device_destroy(g_data_device);
+    if (g_primary_device) zwp_primary_selection_device_v1_destroy(g_primary_device);
+    if (g_data_dev_mgr)  wl_data_device_manager_destroy(g_data_dev_mgr);
+    if (g_primary_mgr)   zwp_primary_selection_device_manager_v1_destroy(g_primary_mgr);
+
     if (g_seat)          wl_seat_destroy(g_seat);
     if (g_layer_shell)   zwlr_layer_shell_v1_destroy(g_layer_shell);
     if (g_shm)           wl_shm_destroy(g_shm);

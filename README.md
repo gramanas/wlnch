@@ -159,6 +159,24 @@ Consecutive kill commands (e.g. `Ctrl+K Ctrl+K` or
 `Ctrl+W Ctrl+W`) accumulate into a single kill-ring entry, so a
 following `Ctrl+Y` restores everything as one paste.
 
+Pasting from the system clipboards:
+
+- `Ctrl+V` — paste from the **clipboard** (the Wayland
+  `wl_data_device` selection — what other apps' Ctrl+C writes into)
+- `Shift+Insert` — paste from the **primary selection** (the Wayland
+  `zwp_primary_selection_device_v1` buffer — what middle-click pastes
+  from)
+
+Pasted text is inserted at the cursor as-is; embedded newlines stay
+in the buffer rather than committing (`Enter` is reserved for
+explicit submission). NUL bytes and `\r` are stripped, so CRLF input
+is normalised to LF. wnpt prefers `text/plain;charset=utf-8` and
+falls back through `UTF8_STRING`, `text/plain`, then `STRING`/`TEXT`.
+
+Both bindings no-op silently if the compositor doesn't support the
+relevant manager (clipboard via `wl_data_device_manager`, primary via
+`zwp_primary_selection_device_manager_v1`).
+
 Typical usage:
 
 ```sh
