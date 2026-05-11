@@ -51,7 +51,7 @@ jobs:
         run: |
           OWNER="${FORGEJO_REPOSITORY%/*}"
           for pkg in *.pkg.tar.zst; do
-            curl -s --fail -X PUT \
+            curl -v -s --fail -X PUT \
               "${FORGEJO_SERVER_URL}/api/packages/${OWNER}/arch/os" \
               --user "forgejo-actions:${FORGEJO_TOKEN}" \
               --header "Content-Type: application/octet-stream" \
