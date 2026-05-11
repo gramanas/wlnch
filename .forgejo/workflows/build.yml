@@ -40,6 +40,24 @@ jobs:
       - name: Build
         run: make
 
+      - name: Build pacman packages
+        run: |
+          # makepkg refuses to run as root
+          useradd -m builder
+          chown -R builder:builder .
+          su builder -c "makepkg --noconfirm --nodeps --noprogressbar"
+ 
+      - name: Push to Forgejo arch registry
+        run: |
+          OWNER="${FORGEJO_REPOSITORY%/*}"
+          for pkg in *.pkg.tar.zst; do
+            curl -s --fail -X PUT \
+              "${FORGEJO_SERVER_URL}/api/packages/${OWNER}/arch/os" \
+              --user "forgejo-actions:${FORGEJO_TOKEN}" \
+              --header "Content-Type: application/octet-stream" \
+              --data-binary "@${pkg}"
+          done
+
       - name: Prepare release
         run: |
           mkdir -p dist/release
