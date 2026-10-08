@@ -18,11 +18,11 @@ in [`README.md`](README.md); this file is the *internals*.
   Makefile lists `config.h` as a dependency of `wlnch.o`, so editing
   it triggers a rebuild on the next `make`.
 - Two sibling binaries built from the same repository:
-  - [`wnpt`](wnpt.c) — a text-input prompt with readline editing that
+  - [`wlnch-in`](wlnch-in.c) — a text-input prompt with readline editing that
     prints typed text to stdout on commit. See the
-    [wnpt section](#wnpt).
-  - [`wout`](wout.c) — a stdin viewer that displays piped content in
-    the overlay and exits on dismissal. See the [wout section](#wout).
+    [wlnch-in section](#wlnch-in).
+  - [`wlnch-out`](wlnch-out.c) — a stdin viewer that displays piped content in
+    the overlay and exits on dismissal. See the [wlnch-out section](#wlnch-out).
   - Both share only `config.h` with `wlnch`; the Wayland / FreeType /
     SHM code is intentionally duplicated rather than factored into a
     library, so each tool stays a single self-contained translation
@@ -553,24 +553,24 @@ Roughly in order of usefulness:
 6. **Frame callback + buffer release tracking**: needed for any of (2), (3),
    (4) to be done correctly — we currently leak the single buffer at exit.
 
-## wnpt
+## wlnch-in
 
-`wnpt` ("Wayland note prompt") is a sibling binary built from
-[`wnpt.c`](wnpt.c). It opens the same kind of overlay layer-surface as
+`wlnch-in` ("wlnch input") is a sibling binary built from
+[`wlnch-in.c`](wlnch-in.c). It opens the same kind of overlay layer-surface as
 `wlnch` and uses the same visual constants (everything in `config.h`
-under both the shared section and the dedicated `wnpt (note prompt)`
-block — `CURSOR_COLOR`, `CURSOR_WIDTH`, `WNPT_MIN_WIDTH`,
-`WNPT_MAX_WIDTH`).
+under both the shared section and the dedicated `wlnch-in (note prompt)`
+block — `CURSOR_COLOR`, `CURSOR_WIDTH`, `WLNCH_IN_MIN_WIDTH`,
+`WLNCH_IN_MAX_WIDTH`).
 
 Because the two tools are intentionally kept as standalone single-TU
-programs, `wnpt.c` copies most of `wlnch.c` rather than refactoring
+programs, `wlnch-in.c` copies most of `wlnch.c` rather than refactoring
 into a shared library: globals, FreeType / fontconfig setup, glyph
 blending, SHM allocation, registry / seat / keyboard / layer-surface
 listeners. This section covers only the parts that genuinely differ.
 
 ### Mode and key dispatch
 
-`wnpt` is a text-input prompt with readline-style editing:
+`wlnch-in` is a text-input prompt with readline-style editing:
 
 - The keysym is resolved via `xkb_state_key_get_one_sym` (honoring the
   current layout group), not via the layout-0 trick `wlnch` uses for
@@ -663,7 +663,7 @@ two and leaves the cursor at the end. This matches GNU readline's
 
 ### Optional prompt (`-p PROMPT`)
 
-`wnpt -p "Note: "` paints a label at the start of the first row in
+`wlnch-in -p "Note: "` paints a label at the start of the first row in
 `COLOR_PROMPT` (themable via `config.h`, defaults to `COLOR_KEY` so
 it visually matches wlnch's accent). The prompt is purely visual:
 it never enters `g_text` and is never emitted on commit; only typed
@@ -696,9 +696,9 @@ Unlike `wlnch`, the window content changes on every keystroke, so
 - if the dimensions are unchanged, it just attaches a fresh buffer
   immediately.
 
-Width grows to fit the widest line, clamped to `[WNPT_MIN_WIDTH,
-WNPT_MAX_WIDTH]`. Height grows linearly with the line count. Long
-lines past `WNPT_MAX_WIDTH` clip at the right edge — there is no
+Width grows to fit the widest line, clamped to `[WLNCH_IN_MIN_WIDTH,
+WLNCH_IN_MAX_WIDTH]`. Height grows linearly with the line count. Long
+lines past `WLNCH_IN_MAX_WIDTH` clip at the right edge — there is no
 wrapping or scrolling, this is a one-shot prompt.
 
 ### SHM buffer release tracking
@@ -722,7 +722,7 @@ surface-closed.
 
 ### Clipboard / primary selection paste
 
-`wnpt` listens to two Wayland selection devices so the user can pull
+`wlnch-in` listens to two Wayland selection devices so the user can pull
 text in from elsewhere on the desktop:
 
 - **Ctrl+V** → the *clipboard* (`wl_data_device`, what apps' Ctrl+C
@@ -755,7 +755,7 @@ A `selection` event with a `NULL` offer means the desktop cleared the
 clipboard; the matching paste binding then no-ops until the next
 non-empty `selection` arrives.
 
-We never offer selections of our own — `wnpt` is sink-only — so the
+We never offer selections of our own — `wlnch-in` is sink-only — so the
 DnD half of `wl_data_device` is wired up to no-op handlers (libwayland
 aborts if the listener struct has missing function pointers).
 
@@ -807,13 +807,13 @@ good selection on the desktop.
 Either manager can be missing on minimal compositors; the matching
 paste binding then no-ops silently rather than aborting the program.
 
-## wout
+## wlnch-out
 
-`wout` ("Wayland out") is the third sibling, built from
-[`wout.c`](wout.c). It opens the same kind of overlay layer-surface
-as `wlnch` / `wnpt` and reuses the same visual constants from
-`config.h`, but its own sizing block (`WOUT_MIN_WIDTH`,
-`WOUT_MAX_WIDTH`, `WOUT_MAX_HEIGHT`) so it can be tuned independently
+`wlnch-out` ("wlnch output") is the third sibling, built from
+[`wlnch-out.c`](wlnch-out.c). It opens the same kind of overlay layer-surface
+as `wlnch` / `wlnch-in` and reuses the same visual constants from
+`config.h`, but its own sizing block (`WLNCH_OUT_MIN_WIDTH`,
+`WLNCH_OUT_MAX_WIDTH`, `WLNCH_OUT_MAX_HEIGHT`) so it can be tuned independently
 of the prompt.
 
 Like the other tools it's a single TU and the Wayland / FreeType /
@@ -822,7 +822,7 @@ only the parts that differ.
 
 ### Lifecycle: read once, render once
 
-`wout` is closer to `wlnch` than to `wnpt`: the content is fixed
+`wlnch-out` is closer to `wlnch` than to `wlnch-in`: the content is fixed
 at startup and the window never re-renders. `main` slurps stdin
 into a growable `char *g_text` (doubling capacity, trailing `\n` /
 `\r` stripped so `echo`-style input doesn't grow an empty bottom
@@ -835,7 +835,7 @@ implicitly when the Wayland connection tears down on exit.
 ### Stdin guard
 
 `main` calls `isatty(STDIN_FILENO)` first thing and refuses with a
-clear error if stdin is a tty. Without this guard, a bare `wout`
+clear error if stdin is a tty. Without this guard, a bare `wlnch-out`
 launched from a hotkey or a scratchpad would silently block on
 terminal stdin, which looks like a hang. Pipes and file
 redirections (the only sensible inputs) pass the check.
@@ -850,9 +850,9 @@ redirections (the only sensible inputs) pass the check.
 Then:
 
 ```
-W = clamp(max_line_w + 2*PADDING_X,            WOUT_MIN_WIDTH,  WOUT_MAX_WIDTH)
+W = clamp(max_line_w + 2*PADDING_X,            WLNCH_OUT_MIN_WIDTH,  WLNCH_OUT_MAX_WIDTH)
 H = clamp(2*PADDING_Y + n_lines*row_h - ROW_GAP,
-          0,               WOUT_MAX_HEIGHT)
+          0,               WLNCH_OUT_MAX_HEIGHT)
 ```
 
 `row_h = line_height + ROW_GAP`. Both axes round up to multiples of
@@ -871,7 +871,7 @@ on a non-Latin layout.
 
 ### Auto-close timeout
 
-`wout -t MS` (or `--timeout MS`, parsed via `getopt_long`) closes
+`wlnch-out -t MS` (or `--timeout MS`, parsed via `getopt_long`) closes
 the window after `MS` milliseconds. `0` (the default) means "no
 timeout" — the window blocks until the user dismisses it. The CLI
 parser (`parse_ms`) rejects empty / non-numeric / negative /

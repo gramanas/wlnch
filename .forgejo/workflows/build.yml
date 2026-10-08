@@ -67,7 +67,7 @@ jobs:
         if: startsWith(forgejo.ref, 'refs/tags/')
         run: |
           mkdir -p dist/release
-          cp wlnch wout wnpt dist/release/
+          cp wlnch wlnch-out wlnch-in dist/release/
 
       - name: Publish release
         if: startsWith(forgejo.ref, 'refs/tags/')
@@ -89,7 +89,7 @@ jobs:
 #      - name: Upload artifacts
 #        working-directory: src
 #        run: |
-#          for bin in wlnch wout wnpt; do
+#          for bin in wlnch wlnch-out wlnch-in; do
 #            curl -s --fail \
 #              -H "Authorization: token $FORGEJO_TOKEN" \
 #              -F "file=@${bin}" \

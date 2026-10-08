@@ -1,5 +1,5 @@
 /*
- * wout - tiny Wayland stdin viewer, companion to wlnch / wnpt.
+ * wlnch-out - tiny Wayland stdin viewer, companion to wlnch / wlnch-in.
  *
  * Reads all of stdin into memory at startup, opens an OVERLAY
  * layer-shell window, grabs the keyboard exclusively, renders the
@@ -17,17 +17,17 @@
  *
  * Typical usage:
  *
- *   echo "hello"            | wout
- *   git log --oneline -10   | wout
- *   date                    | wout
- *   echo "build finished"   | wout -t 3000   # auto-close after 3 s
+ *   echo "hello"            | wlnch-out
+ *   git log --oneline -10   | wlnch-out
+ *   date                    | wlnch-out
+ *   echo "build finished"   | wlnch-out -t 3000   # auto-close after 3 s
  *
  * Visual styling (font, colors, padding, corner radius) is shared
- * with wlnch / wnpt via config.h. Sizing is bounded by
- * WOUT_MIN_WIDTH / WOUT_MAX_WIDTH / WOUT_MAX_HEIGHT — long lines
+ * with wlnch / wlnch-in via config.h. Sizing is bounded by
+ * WLNCH_OUT_MIN_WIDTH / WLNCH_OUT_MAX_WIDTH / WLNCH_OUT_MAX_HEIGHT — long lines
  * clip at the right edge, extra rows clip at the bottom.
  *
- * Single translation unit, mostly verbatim from wlnch.c / wnpt.c
+ * Single translation unit, mostly verbatim from wlnch.c / wlnch-in.c
  * by design — the three tools are siblings, not a library. Layout:
  *
  *   1. Includes
@@ -77,7 +77,7 @@
 /* ---------- 2. Globals ---------- */
 
 /* Slurped stdin contents. Always nul-terminated. Trailing '\n' /
- * '\r' are stripped so a typical `printf "foo\n" | wout` doesn't
+ * '\r' are stripped so a typical `printf "foo\n" | wlnch-out` doesn't
  * grow the window with a useless empty bottom row. */
 static char   *g_text;
 static size_t  g_text_len;
@@ -119,14 +119,14 @@ static long g_timeout_ms = 0;
 static void die(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "wout: ");
+    fprintf(stderr, "wlnch-out: ");
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
     exit(1);
 }
 
-/* Bounded UTF-8 decode (copied from wnpt.c). Returns bytes consumed
+/* Bounded UTF-8 decode (copied from wlnch-in.c). Returns bytes consumed
  * or 0 on error. Stops at `s + max` even mid-sequence. */
 static int utf8_decode_n(const char *s, size_t max, uint32_t *out) {
     if (max == 0) return 0;
@@ -325,7 +325,7 @@ static int draw_text_n(uint32_t *pixels, int w, int h,
 /* ---------- 5. SHM buffer ---------- */
 
 static int create_shm_fd(size_t size) {
-    int fd = memfd_create("wout-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    int fd = memfd_create("wlnch-out-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) return -1;
     if (ftruncate(fd, (off_t)size) < 0) {
         close(fd);
@@ -361,7 +361,7 @@ static void fill_rect(uint32_t *pixels, int w, int h, uint32_t color) {
     for (int i = 0; i < n; ++i) pixels[i] = color;
 }
 
-/* Verbatim from wlnch.c / wnpt.c. */
+/* Verbatim from wlnch.c / wlnch-in.c. */
 static void apply_rounded_corners(uint32_t *pixels, int w, int h, int radius) {
     if (radius <= 0) return;
 
@@ -420,11 +420,11 @@ static void compute_window_size(void) {
     }
 
     int w = max_line_w + 2 * PADDING_X;
-    if (w < WOUT_MIN_WIDTH) w = WOUT_MIN_WIDTH;
-    if (w > WOUT_MAX_WIDTH) w = WOUT_MAX_WIDTH;
+    if (w < WLNCH_OUT_MIN_WIDTH) w = WLNCH_OUT_MIN_WIDTH;
+    if (w > WLNCH_OUT_MAX_WIDTH) w = WLNCH_OUT_MAX_WIDTH;
 
     int h = 2 * PADDING_Y + n_lines * row_h - ROW_GAP;
-    if (h > WOUT_MAX_HEIGHT) h = WOUT_MAX_HEIGHT;
+    if (h > WLNCH_OUT_MAX_HEIGHT) h = WLNCH_OUT_MAX_HEIGHT;
 
     if (w & 1) ++w;
     if (h & 1) ++h;
@@ -440,7 +440,7 @@ static void render_frame(uint32_t *pixels, int w, int h) {
 
     /* Walk the buffer one '\n'-delimited line at a time. blit_glyph
      * already clips against w/h, so lines past the right or bottom
-     * edge are silently truncated by the corresponding WOUT_MAX_*. */
+     * edge are silently truncated by the corresponding WLNCH_OUT_MAX_*. */
     size_t line_start = 0;
     for (size_t i = 0; i <= g_text_len; ++i) {
         bool is_eol = (i == g_text_len) || (g_text[i] == '\n');
@@ -569,7 +569,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
         g_xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
 
     /* Any of the standard "dismiss" keys closes the window. We
-     * include Enter / Space so wout works as a "press any key to
+     * include Enter / Space so wlnch-out works as a "press any key to
      * continue" overlay, plus the wlnch-style Esc / q / Ctrl-G. */
     if (sym == XKB_KEY_Escape ||
         sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter ||
@@ -664,24 +664,24 @@ static const struct wl_registry_listener registry_listener = {
 
 static void usage(void) {
     fputs(
-        "usage: wout [-f FONT] [-t MS]\n"
+        "usage: wlnch-out [-f FONT] [-t MS]\n"
         "  Reads stdin into memory and shows it in a Wayland overlay.\n"
         "  Dismiss with Esc, Enter, q, Space, or Ctrl+G.\n"
         "\n"
-        "  Long lines clip at the right edge (WOUT_MAX_WIDTH); rows past\n"
-        "  WOUT_MAX_HEIGHT clip at the bottom — pipe through `head` /\n"
+        "  Long lines clip at the right edge (WLNCH_OUT_MAX_WIDTH); rows past\n"
+        "  WLNCH_OUT_MAX_HEIGHT clip at the bottom — pipe through `head` /\n"
         "  `cut` if you only want the start of a long file.\n"
         "\n"
         "  -f, --font FONT       fontconfig pattern\n"
-        "                        (env: WOUT_FONT, then WLNCH_FONT)\n"
+        "                        (env: WLNCH_OUT_FONT, then WLNCH_FONT)\n"
         "  -t, --timeout MS      auto-close after MS milliseconds;\n"
         "                        0 means no timeout (default)\n"
         "  -h, --help            show this help and exit\n"
         "\n"
         "  Examples:\n"
-        "    echo hello              | wout\n"
-        "    git log --oneline       | wout\n"
-        "    date                    | wout -t 3000\n",
+        "    echo hello              | wlnch-out\n"
+        "    git log --oneline       | wlnch-out\n"
+        "    date                    | wlnch-out -t 3000\n",
         stderr);
 }
 
@@ -708,15 +708,15 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    /* Refuse to read from a tty: the whole point of wout is to
-     * display piped output. Without this guard a bare `wout` would
+    /* Refuse to read from a tty: the whole point of wlnch-out is to
+     * display piped output. Without this guard a bare `wlnch-out` would
      * silently block on stdin from the terminal, which looks like
      * a hang. */
     if (isatty(STDIN_FILENO))
-        die("stdin must be a pipe or redirection, e.g. `echo hi | wout`");
+        die("stdin must be a pipe or redirection, e.g. `echo hi | wlnch-out`");
 
     if (!g_font_pattern) {
-        const char *env = getenv("WOUT_FONT");
+        const char *env = getenv("WLNCH_OUT_FONT");
         if (!env || !*env) env = getenv("WLNCH_FONT");
         g_font_pattern = (env && *env) ? env : DEFAULT_FONT;
     }
@@ -741,7 +741,7 @@ int main(int argc, char **argv) {
     if (!g_seat)       die("compositor missing wl_seat");
     if (!g_layer_shell)
         die("compositor does not support wlr-layer-shell-unstable-v1\n"
-            "       (this includes GNOME/Mutter; wout needs Sway, "
+            "       (this includes GNOME/Mutter; wlnch-out needs Sway, "
             "Hyprland, KDE, etc.)");
 
     /* Second roundtrip so seat capability events arrive. */
@@ -750,7 +750,7 @@ int main(int argc, char **argv) {
     g_surface = wl_compositor_create_surface(g_compositor);
     g_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         g_layer_shell, g_surface, NULL,
-        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "wout");
+        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "wlnch-out");
 
     zwlr_layer_surface_v1_add_listener(
         g_layer_surface, &layer_surface_listener, NULL);

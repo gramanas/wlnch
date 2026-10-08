@@ -10,10 +10,10 @@ config format.
 This repository also builds two sibling utilities that share the same
 overlay-window look:
 
-- [`wnpt`](#wnpt) — a minimal note prompt with readline-style line
+- [`wlnch-in`](#wlnch-in) — a minimal note prompt with readline-style line
   editing. Reads typed text from the keyboard and prints it to stdout
   when the user presses Enter.
-- [`wout`](#wout) — a stdin viewer. Slurps stdin, displays it in the
+- [`wlnch-out`](#wlnch-out) — a stdin viewer. Slurps stdin, displays it in the
   overlay, and dismisses on any of `Esc` / `Enter` / `q` / `Space` /
   `Ctrl+G`.
 
@@ -44,6 +44,60 @@ sudo make install   # installs to /usr/local/bin by default
 
 Compile-time defaults (font, colors, padding, row gap, etc.) live in
 [`config.h`](config.h); edit and recompile to retheme.
+
+### Nix / NixOS
+
+The repo is a flake:
+
+```sh
+nix build            # result/bin/{wlnch,wlnch-in,wlnch-out}
+nix run . -- path/to/wlnchrc
+nix develop          # shell with the build deps, then `make`
+```
+
+For NixOS, add the flake as an input and import its module:
+
+```nix
+{
+  inputs.wlnch.url = "git+ssh://git@legit.eyesin.space/grm/wlnch";
+
+  outputs = { nixpkgs, wlnch, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [ wlnch.nixosModules.default ./configuration.nix ];
+    };
+  };
+}
+```
+
+```nix
+# configuration.nix
+programs.wlnch = {
+  enable = true;
+
+  # Compile-time theme (config.h); unset options keep the defaults.
+  theme = {
+    font = "Iosevka:size=24";
+    cornerRadius = 8;
+    colors.key = "FFFFB86C";   # AARRGGBB
+  };
+
+  # Each menu becomes an executable on PATH (here: `launcher`).
+  menus.launcher.entries = [
+    { key = "f"; name = "firefox"; command = "firefox"; }
+    { key = "o"; name = "term"; command = "kitty"; sticky = true; }
+    "---"
+    { key = "l"; name = "lock"; command = "swaylock"; color = "#E06B6B"; }
+  ];
+};
+```
+
+Bind `launcher` (or `${config.programs.wlnch.menus.launcher.package}/bin/launcher`)
+to a key in your compositor. Other options: `font` (runtime `WLNCH_FONT`,
+no rebuild), `menus.<name>.extraConfig` (raw config lines), and
+`theme.input.*` / `theme.output.*` for the `wlnch-in` / `wlnch-out` window
+sizes. The package is also available via `wlnch.overlays.default`, and
+`pkgs.wlnch.override { configH = { CORNER_RADIUS = "4"; }; }` sets any
+`config.h` macro directly.
 
 ## Configuration
 
@@ -118,9 +172,9 @@ The window appears centered, grabs the keyboard, and:
 
 The font can also be set via the `WLNCH_FONT` environment variable.
 
-## wnpt
+## wlnch-in
 
-`wnpt` ("Wayland note prompt") is a companion binary built from the same
+`wlnch-in` ("wlnch input") is a companion binary built from the same
 repo. It opens an overlay layer-surface that looks like a `wlnch` window
 but renders no preset entries — instead it accepts arbitrary text from
 the keyboard and prints the buffer to stdout on commit.
@@ -170,7 +224,7 @@ Pasting from the system clipboards:
 Pasted text is inserted at the cursor as-is; embedded newlines stay
 in the buffer rather than committing (`Enter` is reserved for
 explicit submission). NUL bytes and `\r` are stripped, so CRLF input
-is normalised to LF. wnpt prefers `text/plain;charset=utf-8` and
+is normalised to LF. wlnch-in prefers `text/plain;charset=utf-8` and
 falls back through `UTF8_STRING`, `text/plain`, then `STRING`/`TEXT`.
 
 Both bindings no-op silently if the compositor doesn't support the
@@ -180,14 +234,14 @@ relevant manager (clipboard via `wl_data_device_manager`, primary via
 Typical usage:
 
 ```sh
-wnpt > note.txt                     # capture a quick note to a file
-echo "hello $(wnpt)"                # interpolate a typed value into a command
-wnpt -p "title: " > new-post.md     # show a labeled prompt before the input
+wlnch-in > note.txt                     # capture a quick note to a file
+echo "hello $(wlnch-in)"                # interpolate a typed value into a command
+wlnch-in -p "title: " > new-post.md     # show a labeled prompt before the input
 ```
 
 Visual styling (font, colors, padding, corner radius, cursor, prompt
 color) is shared with `wlnch` via `config.h`. The font can also be
-overridden per-run with `-f FONT` or via `$WNPT_FONT` (falling back to
+overridden per-run with `-f FONT` or via `$WLNCH_IN_FONT` (falling back to
 `$WLNCH_FONT`).
 
 The `-p PROMPT` flag draws a single-line label in front of the input
@@ -196,11 +250,11 @@ area, rendered in `COLOR_PROMPT` (defaults to the same accent blue
 the buffer and is never written to stdout. Multi-line prompts are
 rejected with a clear error.
 
-## wout
+## wlnch-out
 
-`wout` ("Wayland out") is the third sibling. It reads all of stdin into
+`wlnch-out` ("wlnch output") is the third sibling. It reads all of stdin into
 memory at startup, opens an overlay layer-surface that looks like
-`wlnch` / `wnpt`, renders the text statically, and exits when the user
+`wlnch` / `wlnch-in`, renders the text statically, and exits when the user
 dismisses the window. There is no editing, no cursor, no scrolling —
 strictly a "show this and wait" dialog.
 
@@ -209,42 +263,42 @@ Dismiss any of: `Esc`, `Enter`, `q`, `Space`, `Ctrl+G`.
 Typical usage:
 
 ```sh
-echo "build finished"     | wout
-git log --oneline -10     | wout
-date                      | wout
+echo "build finished"     | wlnch-out
+git log --oneline -10     | wlnch-out
+date                      | wlnch-out
 
 # show the result of a long-running command when it's done
-( make 2>&1; echo "exit=$?" ) | wout
+( make 2>&1; echo "exit=$?" ) | wlnch-out
 
 # auto-close after 3 seconds (toast-style notification)
-echo "saved!"             | wout -t 3000
-date '+%H:%M:%S'          | wout --timeout 1500
+echo "saved!"             | wlnch-out -t 3000
+date '+%H:%M:%S'          | wlnch-out --timeout 1500
 ```
 
 Flags:
 
-- `-f FONT` / `--font FONT` — fontconfig pattern (env: `$WOUT_FONT`,
+- `-f FONT` / `--font FONT` — fontconfig pattern (env: `$WLNCH_OUT_FONT`,
   then `$WLNCH_FONT`).
 - `-t MS` / `--timeout MS` — auto-close after `MS` milliseconds. The
   default `0` means "no timeout"; the window stays open until the
   user dismisses it.
 
-`wout` refuses to read from a tty (so a bare `wout` doesn't silently
+`wlnch-out` refuses to read from a tty (so a bare `wlnch-out` doesn't silently
 hang on terminal stdin); use a pipe or a redirection.
 
 Sizing:
 
 - Width grows to fit the widest line, clamped to
-  `[WOUT_MIN_WIDTH, WOUT_MAX_WIDTH]`.
+  `[WLNCH_OUT_MIN_WIDTH, WLNCH_OUT_MAX_WIDTH]`.
 - Height grows linearly with line count, clamped to
-  `WOUT_MAX_HEIGHT`.
+  `WLNCH_OUT_MAX_HEIGHT`.
 - Long lines clip at the right edge; rows past the height cap clip
   at the bottom. Pipe through `head` / `cut` if you only want the
   beginning of a long file.
 
 Visual styling and the height/width caps are tunable in
 [`config.h`](config.h). The font can also be overridden per-run with
-`-f FONT` or via `$WOUT_FONT` (falling back to `$WLNCH_FONT`).
+`-f FONT` or via `$WLNCH_OUT_FONT` (falling back to `$WLNCH_FONT`).
 
 ## Why not GNOME?
 

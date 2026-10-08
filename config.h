@@ -106,15 +106,15 @@
  * Default: 12. */
 #define CORNER_RADIUS 18
 
-/* ---------- wnpt (note prompt) ---------- */
+/* ---------- wlnch-in (note prompt) ---------- */
 
 /* Color of the cursor bar drawn at the end of the typed text in
- * wnpt. By default it tracks COLOR_FG so the cursor matches the
+ * wlnch-in. By default it tracks COLOR_FG so the cursor matches the
  * text color; override for a more / less prominent caret.
  * Default: COLOR_FG. */
 #define CURSOR_COLOR COLOR_FG
 
-/* Color used to render the optional prompt (`wnpt -p PROMPT`)
+/* Color used to render the optional prompt (`wlnch-in -p PROMPT`)
  * shown at the start of the first row before the user's input.
  * Tracking COLOR_KEY by default keeps the visual signature
  * consistent with wlnch's accent.
@@ -125,40 +125,40 @@
  * Default: 2. */
 #define CURSOR_WIDTH 2
 
-/* Minimum width (in pixels) of the wnpt window. Used as the floor
+/* Minimum width (in pixels) of the wlnch-in window. Used as the floor
  * even when the typed text is short or the buffer is empty, so the
  * prompt always presents a usable text area. Pure-text mode has
  * no key-label column to anchor a sensible width otherwise.
  * Default: 480. */
-#define WNPT_MIN_WIDTH 480
+#define WLNCH_IN_MIN_WIDTH 480
 
-/* Maximum width (in pixels) of the wnpt window. Lines longer than
+/* Maximum width (in pixels) of the wlnch-in window. Lines longer than
  * this clip at the right edge instead of growing the window past
  * the screen. There is no scrolling or wrapping; a long line just
  * runs off the end of the visible area until you delete or newline.
  * Default: 1200. */
-#define WNPT_MAX_WIDTH 1200
+#define WLNCH_IN_MAX_WIDTH 1200
 
-/* ---------- wout (stdin viewer) ---------- */
+/* ---------- wlnch-out (stdin viewer) ---------- */
 
-/* Minimum width (in pixels) of the wout window. Floors the
+/* Minimum width (in pixels) of the wlnch-out window. Floors the
  * window even when the piped input is short, so the result still
  * looks like a deliberate dialog rather than a pixel-thin sliver.
  * Default: 480. */
-#define WOUT_MIN_WIDTH  480
+#define WLNCH_OUT_MIN_WIDTH  480
 
-/* Maximum width (in pixels) of the wout window. Long lines clip
+/* Maximum width (in pixels) of the wlnch-out window. Long lines clip
  * at the right edge rather than growing the window past the
- * screen. Larger than WNPT_MAX_WIDTH because wout commonly shows
+ * screen. Larger than WLNCH_IN_MAX_WIDTH because wlnch-out commonly shows
  * pre-formatted output like `git log` or `man` excerpts.
  * Default: 1600. */
-#define WOUT_MAX_WIDTH  1600
+#define WLNCH_OUT_MAX_WIDTH  1600
 
-/* Maximum height (in pixels) of the wout window. If the piped
+/* Maximum height (in pixels) of the wlnch-out window. If the piped
  * input has more lines than fit, rows past this height clip
  * silently — there is no scrolling. Pipe through `head` if you
  * only want the top of a long file.
  * Default: 1000. */
-#define WOUT_MAX_HEIGHT 1000
+#define WLNCH_OUT_MAX_HEIGHT 1000
 
 #endif /* WLNCH_CONFIG_H */

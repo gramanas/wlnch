@@ -1,5 +1,5 @@
 /*
- * wnpt - tiny Wayland note prompt, companion to wlnch.
+ * wlnch-in - tiny Wayland note prompt, companion to wlnch.
  *
  * Opens an OVERLAY layer-shell window, grabs the keyboard exclusively,
  * and lets the user type arbitrary UTF-8 text with readline-style
@@ -54,7 +54,7 @@
  *
  * Typical usage:
  *
- *   wnpt > note.txt
+ *   wlnch-in > note.txt
  *
  * Visual styling (font, colors, padding, corner radius, cursor width)
  * is shared with wlnch via config.h. The Wayland / FreeType / SHM
@@ -196,7 +196,7 @@ static const char *g_font_pattern = NULL;
 static void die(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "wnpt: ");
+    fprintf(stderr, "wlnch-in: ");
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
@@ -584,7 +584,7 @@ static int draw_text_n(uint32_t *pixels, int w, int h,
 /* ---------- 6. SHM buffer ---------- */
 
 static int create_shm_fd(size_t size) {
-    int fd = memfd_create("wnpt-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    int fd = memfd_create("wlnch-in-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) return -1;
     if (ftruncate(fd, (off_t)size) < 0) {
         close(fd);
@@ -593,7 +593,7 @@ static int create_shm_fd(size_t size) {
     return fd;
 }
 
-/* Per-buffer state so we can munmap on release. wnpt redraws on every
+/* Per-buffer state so we can munmap on release. wlnch-in redraws on every
  * keystroke, so unlike wlnch we MUST track buffer ownership: each
  * `wl_buffer.release` event needs to free its mmap and destroy the
  * buffer object, otherwise we leak one mapping per keystroke. */
@@ -722,8 +722,8 @@ static void compute_window_size(int *out_w, int *out_h) {
     /* Reserve a few pixels so the cursor at end-of-line isn't clipped
      * against the right padding. */
     int w = max_line_w + 2 * PADDING_X + CURSOR_WIDTH + 4;
-    if (w < WNPT_MIN_WIDTH) w = WNPT_MIN_WIDTH;
-    if (w > WNPT_MAX_WIDTH) w = WNPT_MAX_WIDTH;
+    if (w < WLNCH_IN_MIN_WIDTH) w = WLNCH_IN_MIN_WIDTH;
+    if (w > WLNCH_IN_MAX_WIDTH) w = WLNCH_IN_MAX_WIDTH;
 
     int h = 2 * PADDING_Y + n_lines * row_h - ROW_GAP;
 
@@ -909,7 +909,7 @@ static void data_dev_selection(void *data, struct wl_data_device *d,
     clip_offer_replace(offer);
 }
 
-/* DnD is not used by wnpt — but the listener struct demands handlers
+/* DnD is not used by wlnch-in — but the listener struct demands handlers
  * for enter / leave / motion / drop, otherwise libwayland aborts on
  * the first DnD event. They no-op safely. */
 static void data_dev_enter(void *data, struct wl_data_device *d,
@@ -1247,7 +1247,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb,
     /* Shift+Insert pastes the primary selection (mouse-highlight
      * buffer). Plain Insert and other modifier combos are ignored
      * — we don't model overwrite mode, and Ctrl+Insert (a copy
-     * alias on some desktops) has nothing to copy from wnpt. */
+     * alias on some desktops) has nothing to copy from wlnch-in. */
     if (sym == XKB_KEY_Insert) {
         if (shift && !ctrl && !alt && !super) {
             paste_from_primary();
@@ -1467,7 +1467,7 @@ static const struct wl_registry_listener registry_listener = {
 
 static void usage(void) {
     fputs(
-        "usage: wnpt [-f FONT] [-p PROMPT]\n"
+        "usage: wlnch-in [-f FONT] [-p PROMPT]\n"
         "  Reads typed text from a Wayland overlay window with readline-\n"
         "  style line editing. On Enter, prints the buffered text to\n"
         "  stdout and exits 0; on Esc or Ctrl-G, exits 1 without\n"
@@ -1481,7 +1481,7 @@ static void usage(void) {
         "             Ctrl+U (kill to BOL), Ctrl+Y (yank), Ctrl+T (transpose).\n"
         "  Pasting  : Ctrl+V (clipboard), Shift+Insert (primary selection).\n"
         "\n"
-        "  -f FONT     fontconfig pattern (env: WNPT_FONT, then WLNCH_FONT)\n"
+        "  -f FONT     fontconfig pattern (env: WLNCH_IN_FONT, then WLNCH_FONT)\n"
         "  -p PROMPT   single-line text to display before the input area;\n"
         "              shown in COLOR_PROMPT, never written to stdout\n",
         stderr);
@@ -1503,7 +1503,7 @@ int main(int argc, char **argv) {
     }
 
     if (!g_font_pattern) {
-        const char *env = getenv("WNPT_FONT");
+        const char *env = getenv("WLNCH_IN_FONT");
         if (!env || !*env) env = getenv("WLNCH_FONT");
         g_font_pattern = (env && *env) ? env : DEFAULT_FONT;
     }
@@ -1542,7 +1542,7 @@ int main(int argc, char **argv) {
     if (!g_seat)       die("compositor missing wl_seat");
     if (!g_layer_shell)
         die("compositor does not support wlr-layer-shell-unstable-v1\n"
-            "       (this includes GNOME/Mutter; wnpt needs Sway, "
+            "       (this includes GNOME/Mutter; wlnch-in needs Sway, "
             "Hyprland, KDE, etc.)");
 
     /* Second roundtrip so seat capability events arrive. */
@@ -1574,7 +1574,7 @@ int main(int argc, char **argv) {
     g_surface = wl_compositor_create_surface(g_compositor);
     g_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         g_layer_shell, g_surface, NULL,
-        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "wnpt");
+        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "wlnch-in");
 
     zwlr_layer_surface_v1_add_listener(
         g_layer_surface, &layer_surface_listener, NULL);
@@ -1591,7 +1591,7 @@ int main(int argc, char **argv) {
     }
 
     /* Commit the buffer to stdout before tearing down the compositor
-     * connection: keeps the spawn-and-pipe pattern (`wnpt > note.txt`)
+     * connection: keeps the spawn-and-pipe pattern (`wlnch-in > note.txt`)
      * predictable. A trailing newline is appended if missing so the
      * file ends well-formed; an empty buffer prints nothing at all. */
     if (g_committed && g_text_len > 0) {

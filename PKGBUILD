@@ -1,6 +1,6 @@
 # Maintainer: grm <grm@eyesin.space>
 pkgbase=wl-tools
-pkgname=(wlnch wout wnpt)
+pkgname=(wlnch wlnch-in wlnch-out)
 pkgver=dev
 pkgrel=1
 pkgdesc="Wayland tools"
@@ -18,12 +18,16 @@ package_wlnch() {
   install -Dm755 "$startdir/wlnch" "$pkgdir/usr/bin/wlnch"
 }
 
-package_wout() {
+package_wlnch-out() {
   pkgdesc="Wayland output tool"
-  install -Dm755 "$startdir/wout" "$pkgdir/usr/bin/wout"
+  replaces=(wout)
+  conflicts=(wout)
+  install -Dm755 "$startdir/wlnch-out" "$pkgdir/usr/bin/wlnch-out"
 }
 
-package_wnpt() {
+package_wlnch-in() {
   pkgdesc="Wayland input tool"
-  install -Dm755 "$startdir/wnpt" "$pkgdir/usr/bin/wnpt"
+  replaces=(wnpt)
+  conflicts=(wnpt)
+  install -Dm755 "$startdir/wlnch-in" "$pkgdir/usr/bin/wlnch-in"
 }

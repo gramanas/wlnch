@@ -20,11 +20,11 @@ PROTO_SOURCES = \
 
 PROTO_OBJS = $(PROTO_SOURCES:.c=.o)
 
-WLNCH_OBJS = wlnch.o $(PROTO_OBJS)
-WNPT_OBJS  = wnpt.o  $(PROTO_OBJS)
-WOUT_OBJS  = wout.o  $(PROTO_OBJS)
+WLNCH_OBJS     = wlnch.o     $(PROTO_OBJS)
+WLNCH_IN_OBJS  = wlnch-in.o  $(PROTO_OBJS)
+WLNCH_OUT_OBJS = wlnch-out.o $(PROTO_OBJS)
 
-all: wlnch wnpt wout
+all: wlnch wlnch-in wlnch-out
 
 $(PROTO_DIR)/%-client-protocol.h: $(PROTO_DIR)/%.xml
 	wayland-scanner client-header $< $@
@@ -35,10 +35,10 @@ $(PROTO_DIR)/%-protocol.c: $(PROTO_DIR)/%.xml
 wlnch.o: wlnch.c config.h $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-wnpt.o: wnpt.c config.h $(PROTO_HEADERS)
+wlnch-in.o: wlnch-in.c config.h $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-wout.o: wout.c config.h $(PROTO_HEADERS)
+wlnch-out.o: wlnch-out.c config.h $(PROTO_HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(PROTO_DIR)/%-protocol.o: $(PROTO_DIR)/%-protocol.c $(PROTO_HEADERS)
@@ -47,23 +47,23 @@ $(PROTO_DIR)/%-protocol.o: $(PROTO_DIR)/%-protocol.c $(PROTO_HEADERS)
 wlnch: $(WLNCH_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(WLNCH_OBJS) $(LDLIBS)
 
-wnpt: $(WNPT_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(WNPT_OBJS) $(LDLIBS)
+wlnch-in: $(WLNCH_IN_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(WLNCH_IN_OBJS) $(LDLIBS)
 
-wout: $(WOUT_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(WOUT_OBJS) $(LDLIBS)
+wlnch-out: $(WLNCH_OUT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(WLNCH_OUT_OBJS) $(LDLIBS)
 
-install: wlnch wnpt wout
-	install -Dm755 wlnch $(DESTDIR)$(BINDIR)/wlnch
-	install -Dm755 wnpt  $(DESTDIR)$(BINDIR)/wnpt
-	install -Dm755 wout  $(DESTDIR)$(BINDIR)/wout
+install: wlnch wlnch-in wlnch-out
+	install -Dm755 wlnch     $(DESTDIR)$(BINDIR)/wlnch
+	install -Dm755 wlnch-in  $(DESTDIR)$(BINDIR)/wlnch-in
+	install -Dm755 wlnch-out $(DESTDIR)$(BINDIR)/wlnch-out
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/wlnch
-	rm -f $(DESTDIR)$(BINDIR)/wnpt
-	rm -f $(DESTDIR)$(BINDIR)/wout
+	rm -f $(DESTDIR)$(BINDIR)/wlnch-in
+	rm -f $(DESTDIR)$(BINDIR)/wlnch-out
 
 clean:
-	rm -f wlnch wnpt wout *.o $(PROTO_OBJS) $(PROTO_HEADERS) $(PROTO_SOURCES)
+	rm -f wlnch wlnch-in wlnch-out *.o $(PROTO_OBJS) $(PROTO_HEADERS) $(PROTO_SOURCES)
 
 .PHONY: all install uninstall clean
