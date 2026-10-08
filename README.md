@@ -59,7 +59,7 @@ For NixOS, add the flake as an input and import its module:
 
 ```nix
 {
-  inputs.wlnch.url = "git+ssh://git@legit.eyesin.space/grm/wlnch";
+  inputs.wlnch.url = "git+https://legit.eyesin.space/grm/wlnch";
 
   outputs = { nixpkgs, wlnch, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
@@ -97,7 +97,7 @@ no rebuild), `menus.<name>.extraConfig` (raw config lines), and
 `theme.input.*` / `theme.output.*` for the `wlnch-in` / `wlnch-out` window
 sizes. The package is also available via `wlnch.overlays.default`, and
 `pkgs.wlnch.override { configH = { CORNER_RADIUS = "4"; }; }` sets any
-`config.h` macro directly.
+`config.h` macro directly. See [`nix/NIXOS.md`](nix/NIXOS.md) for the full option reference.
 
 ## Configuration
 
