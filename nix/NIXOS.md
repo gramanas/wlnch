@@ -40,7 +40,8 @@ so `flake.lock` gets the entry. Commit/`git add` the lock file. Flakes only
 see tracked files.
 
 Do **not** also add `inputs.wlnch.overlays.default` unless something else
-needs `pkgs.wlnch`; the module already defaults to the flake's package.
+needs `pkgs.wlnch`; the module already builds the package with the system's
+`pkgs`, so its libraries (fontconfig etc.) always match the running system.
 
 ## 2. Configure `programs.wlnch`
 
@@ -127,7 +128,7 @@ If the compositor config is a raw file in the repo, use the bare command name
 | Option | Type | Default | Notes |
 |---|---|---|---|
 | `enable` | bool | `false` | Installs the three binaries. |
-| `package` | package | flake's package | Base package; theme is applied on top. |
+| `package` | package | built from the system's `pkgs` | Base package; theme is applied on top. |
 | `finalPackage` | package (read-only) | | Package actually installed. |
 | `font` | null or str | `null` | Exported as `WLNCH_FONT`. Runtime, no rebuild. |
 | `theme.font` | null or str | `null` → `"liberation mono:size=32"` | Compiled-in default font. |

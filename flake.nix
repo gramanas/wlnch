@@ -28,7 +28,9 @@
           { pkgs, ... }:
           {
             imports = [ ./nix/module.nix ];
-            programs.wlnch.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.wlnch;
+            # Build against the host system's nixpkgs so libraries (notably fontconfig)
+            # match the system's /etc/fonts, regardless of this flake's lock.
+            programs.wlnch.package = lib.mkDefault (mkWlnch pkgs);
           };
         default = wlnch;
       };

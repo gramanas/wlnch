@@ -257,7 +257,7 @@ in
     package = mkOption {
       type = types.package;
       default = pkgs.callPackage ./package.nix { };
-      defaultText = lib.literalExpression "wlnch.packages.\${system}.wlnch";
+      defaultText = lib.literalMD "built with the system's `pkgs`";
       description = "The wlnch package. Theme options are applied on top of it via `override`.";
     };
 
